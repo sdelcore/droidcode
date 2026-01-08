@@ -15,6 +15,7 @@ import type {
   PermissionResponse,
   AgentDto,
   ConfigProvidersResponse,
+  ProviderDto,
   ProviderStatusDto,
   SessionUpdateRequest,
   SessionStatusDto,
@@ -448,8 +449,18 @@ class ApiClient {
   // Provider status - get connection status for all providers
   async getProviderStatus(hostId: number, port?: number): Promise<ProviderStatusDto[]> {
     const client = this.getClient(hostId, port);
-    const response = await client.get<ProviderStatusDto[]>('/provider');
-    return response.data;
+    const response = await client.get<{ all: ProviderDto[], connected: string[] }>('/provider');
+    
+    // Transform API response into ProviderStatusDto array
+    // API returns { all: Provider[], connected: ["anthropic", "openai"] }
+    // We need: [{ id: "anthropic", name: "Anthropic", connected: true }, ...]
+    const connectedSet = new Set(response.data.connected);
+    
+    return response.data.all.map(provider => ({
+      id: provider.id,
+      name: provider.name,
+      connected: connectedSet.has(provider.id),
+    }));
   }
 
   // Update session - rename, etc.

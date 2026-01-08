@@ -3,7 +3,7 @@
  * Features: Updates, Debug Logs.
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -17,8 +17,11 @@ import * as Clipboard from 'expo-clipboard';
 import { Text, View, useThemeColor } from '@/components/Themed';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useConfigStore } from '@/stores/configStore';
+import { useHostStore } from '@/stores/hostStore';
 import { debugLogManager } from '@/services/debug/debugLogManager';
 import { Colors } from '@/constants/Theme';
+import { ModelPicker } from '@/components/pickers/ModelPicker';
 
 export default function SettingsScreen() {
   const colorScheme = useColorScheme();
@@ -39,9 +42,29 @@ export default function SettingsScreen() {
     dismissError,
   } = useSettingsStore();
 
+  const {
+    providers,
+    providerStatuses,
+    selectedProvider,
+    selectedModel,
+    fetchProviders,
+    fetchProviderStatuses,
+    saveGlobalDefault,
+  } = useConfigStore();
+
+  const { hosts } = useHostStore();
+  const [showModelPicker, setShowModelPicker] = useState(false);
+
   useEffect(() => {
     initialize();
-  }, [initialize]);
+
+    // Fetch providers for the first (default) host if available
+    if (hosts.length > 0) {
+      const defaultHost = hosts[0];
+      fetchProviders(defaultHost.id, defaultHost.port);
+      fetchProviderStatuses(defaultHost.id, defaultHost.port);
+    }
+  }, [initialize, hosts, fetchProviders, fetchProviderStatuses]);
 
   useEffect(() => {
     if (error) {
@@ -82,6 +105,21 @@ export default function SettingsScreen() {
   };
 
   const isUpToDate = !updateAvailable && !isCheckingForUpdate && !isDownloadingUpdate;
+
+  // Get current model/provider info
+  const currentProvider = providers.find((p) => p.id === selectedProvider);
+  const currentModel = currentProvider?.models[selectedModel || ''];
+  const currentProviderStatus = providerStatuses.find((s) => s.id === selectedProvider);
+
+  const handleModelSelect = useCallback(
+    async (providerId: string, modelId: string) => {
+      if (hosts.length > 0) {
+        const defaultHost = hosts[0];
+        await saveGlobalDefault(defaultHost.id, providerId, modelId);
+      }
+    },
+    [hosts, saveGlobalDefault]
+  );
 
   return (
     <ScrollView style={[styles.container, { backgroundColor }]}>
@@ -149,6 +187,60 @@ export default function SettingsScreen() {
 
       <View style={[styles.divider, { backgroundColor: borderColor }]} />
 
+      {/* Default Model Section */}
+      <Text style={[styles.sectionTitle, { color: tertiaryColor }]}>[default model]</Text>
+
+      <Pressable
+        style={[styles.statusCard, { backgroundColor: cardBackground, borderColor }]}
+        onPress={() => setShowModelPicker(true)}
+      >
+        <View style={styles.statusRow}>
+          {currentModel && currentProvider ? (
+            <>
+              <Text style={[styles.statusLabel, { color: mutedColor }]}>provider</Text>
+              <Text style={[styles.statusValue, { color: textColor }]}>
+                {currentProvider.name}
+              </Text>
+              <Text style={[styles.statusLabel, { color: mutedColor, marginTop: 8 }]}>
+                model
+              </Text>
+              <Text style={[styles.statusValue, { color: textColor }]}>
+                {currentModel.name || currentModel.id}
+              </Text>
+              <Text style={[styles.statusLabel, { color: mutedColor, marginTop: 8 }]}>
+                status
+              </Text>
+              <Text
+                style={[
+                  styles.statusValue,
+                  { color: currentProviderStatus?.connected ? Colors.success : Colors.error },
+                ]}
+              >
+                {currentProviderStatus?.connected ? '● connected' : '● disconnected'}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={[styles.statusLabel, { color: mutedColor }]}>status</Text>
+              <Text style={[styles.statusValue, { color: Colors.warning }]}>
+                no model selected
+              </Text>
+            </>
+          )}
+        </View>
+        <MaterialCommunityIcons
+          name="chevron-right"
+          size={20}
+          color={Colors.textSecondary}
+        />
+      </Pressable>
+
+      <Text style={[styles.helpText, { color: secondaryColor }]}>
+        tap to change default model
+      </Text>
+
+      <View style={[styles.divider, { backgroundColor: borderColor }]} />
+
       {/* Debug Logs Section */}
       <View style={styles.logsHeader}>
         <Text style={[styles.sectionTitle, { color: tertiaryColor }]}>[logs]</Text>
@@ -197,6 +289,17 @@ export default function SettingsScreen() {
       <Text style={[styles.version, { color: secondaryColor }]}>
         v{currentVersionName}
       </Text>
+
+      {/* Model Picker Modal */}
+      <ModelPicker
+        visible={showModelPicker}
+        onClose={() => setShowModelPicker(false)}
+        providers={providers}
+        providerStatuses={providerStatuses}
+        selectedProvider={selectedProvider}
+        selectedModel={selectedModel}
+        onSelect={handleModelSelect}
+      />
     </ScrollView>
   );
 }

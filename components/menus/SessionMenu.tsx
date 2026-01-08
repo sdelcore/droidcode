@@ -25,6 +25,8 @@ import * as Haptics from 'expo-haptics'
 
 import { Colors, Spacing, BorderRadius, FontSize, FontFamily } from '@/constants/Theme'
 import type { ProviderDto, ProviderStatusDto, SessionDto } from '@/types'
+import { modelPreferencesRepository } from '@/services/db/repositories/modelPreferencesRepository'
+import { useConfigStore } from '@/stores/configStore'
 
 interface SessionMenuProps {
   visible: boolean
@@ -40,6 +42,10 @@ interface SessionMenuProps {
   // Child sessions
   childSessions: SessionDto[]
   onChildSessionPress: (sessionId: string) => void
+
+  // Context for session overrides
+  hostId: number | null
+  sessionId: string | null
 }
 
 export function SessionMenu({
@@ -52,6 +58,8 @@ export function SessionMenu({
   onModelSelect,
   childSessions,
   onChildSessionPress,
+  hostId,
+  sessionId,
 }: SessionMenuProps) {
   const insets = useSafeAreaInsets()
   const { width: screenWidth } = useWindowDimensions()
@@ -65,6 +73,21 @@ export function SessionMenu({
     modelProvider: false,
     childSessions: false,
   })
+
+  // Check if current session has an override
+  const [hasSessionOverride, setHasSessionOverride] = useState(false)
+
+  useEffect(() => {
+    const checkOverride = async () => {
+      if (sessionId) {
+        const override = await modelPreferencesRepository.getSessionOverride(sessionId)
+        setHasSessionOverride(!!override)
+      } else {
+        setHasSessionOverride(false)
+      }
+    }
+    checkOverride()
+  }, [sessionId, selectedProvider, selectedModel])
 
   useEffect(() => {
     if (visible) {
@@ -126,6 +149,34 @@ export function SessionMenu({
     },
     [onChildSessionPress]
   )
+
+  const handleResetToDefault = useCallback(async () => {
+    if (!sessionId || !hostId) return
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+
+    try {
+      // Clear session override
+      await modelPreferencesRepository.clearSessionOverride(sessionId)
+
+      // Load global default
+      const globalDefault = await modelPreferencesRepository.getGlobalDefault(hostId)
+      if (globalDefault) {
+        onModelSelect(globalDefault.providerId, globalDefault.modelId)
+      } else {
+        // Fallback to server's default from configStore
+        await useConfigStore.getState().loadSavedDefault(hostId)
+        const { selectedProvider: defaultProvider, selectedModel: defaultModel } = useConfigStore.getState()
+        if (defaultProvider && defaultModel) {
+          onModelSelect(defaultProvider, defaultModel)
+        }
+      }
+
+      setHasSessionOverride(false)
+    } catch (error) {
+      console.error('Failed to reset to default model:', error)
+    }
+  }, [sessionId, hostId, onModelSelect])
 
   // Get current model/provider names
   const currentProvider = providers.find((p) => p.id === selectedProvider)
@@ -289,6 +340,18 @@ export function SessionMenu({
               })
             )}
           </CollapsibleSection>
+
+          {/* Reset to Default Button */}
+          {hasSessionOverride && (
+            <Pressable style={styles.resetButton} onPress={handleResetToDefault}>
+              <MaterialCommunityIcons
+                name="restore"
+                size={16}
+                color={Colors.primary}
+              />
+              <Text style={styles.resetButtonText}>Reset to Default Model</Text>
+            </Pressable>
+          )}
 
           {/* Child Sessions Section */}
           {childSessions.length > 0 && (
@@ -677,6 +740,26 @@ const styles = StyleSheet.create({
   },
   modelNameDisabled: {
     color: Colors.textMuted,
+  },
+
+  // Reset button styles
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: Colors.backgroundSecondary,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    marginTop: Spacing.sm,
+  },
+  resetButtonText: {
+    fontSize: FontSize.sm,
+    color: Colors.primary,
+    fontWeight: '600',
   },
 
   // Child sessions styles

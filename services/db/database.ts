@@ -8,7 +8,7 @@ import * as SQLite from 'expo-sqlite';
  */
 
 const DATABASE_NAME = 'droidcode.db';
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 
 // Migration definitions
 interface Migration {
@@ -135,6 +135,29 @@ const migrations: Migration[] = [
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_session_metadata_activity ON session_metadata(last_activity DESC)');
     },
   },
+  {
+    version: 4,
+    up: async (db) => {
+      // Create model_preferences table for storing default and per-session model selections
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS model_preferences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          host_id INTEGER NOT NULL,
+          session_id TEXT,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE,
+          UNIQUE(host_id, session_id)
+        );
+      `);
+
+      // Create indexes for fast lookups
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_model_prefs_host ON model_preferences(host_id)');
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_model_prefs_session ON model_preferences(session_id)');
+    },
+  },
 ];
 
 class DatabaseService {
@@ -229,6 +252,7 @@ class DatabaseService {
    */
   async reset(): Promise<void> {
     if (this.db) {
+      await this.db.execAsync('DROP TABLE IF EXISTS model_preferences');
       await this.db.execAsync('DROP TABLE IF EXISTS session_metadata');
       await this.db.execAsync('DROP TABLE IF EXISTS session_preferences');
       await this.db.execAsync('DROP TABLE IF EXISTS projects');

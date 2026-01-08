@@ -276,6 +276,12 @@ export interface ConfigProvidersResponse {
   default?: Record<string, string>;  // Maps provider ID to default model ID
 }
 
+export interface ProviderListResponse {
+  all: ProviderDto[];
+  default: Record<string, string>;  // Maps provider ID to default model ID
+  connected: string[];  // Array of connected provider IDs
+}
+
 // ============================================================================
 // Session Update DTOs
 // ============================================================================

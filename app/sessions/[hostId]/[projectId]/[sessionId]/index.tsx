@@ -43,6 +43,7 @@ import type { MessageGroup as MessageGroupType, ThinkingModeType } from '@/types
 import { TodoPanelCompact } from '@/components/panels';
 import { PermissionDialog } from '@/components/dialogs';
 import { SessionMenu } from '@/components/menus';
+import { modelPreferencesRepository } from '@/services/db/repositories/modelPreferencesRepository';
 import {
   ErrorBanner,
   EmptyState,
@@ -573,6 +574,22 @@ export default function ChatScreen() {
     abortSession();
   }, [abortSession]);
 
+  const handleModelSelect = useCallback(
+    (providerId: string, modelId: string) => {
+      // Update in-memory state
+      setSelectedModel(providerId, modelId, false);  // Don't auto-persist global
+
+      // Save as session override
+      if (hostId && sessionId) {
+        const numericHostId = parseInt(hostId, 10);
+        modelPreferencesRepository.setSessionOverride(numericHostId, sessionId, providerId, modelId).catch((error) => {
+          console.error('Failed to save session model override:', error);
+        });
+      }
+    },
+    [hostId, sessionId, setSelectedModel]
+  );
+
   const ListHeaderComponent = useCallback(() => {
     const hasContent = todos.length > 0 || parentSessionId;
     if (!hasContent) return null;
@@ -782,9 +799,11 @@ export default function ChatScreen() {
           providerStatuses={providerStatuses}
           selectedProvider={selectedProvider}
           selectedModel={selectedModel}
-          onModelSelect={setSelectedModel}
+          onModelSelect={handleModelSelect}
           childSessions={currentChildSessions}
           onChildSessionPress={handleChildSessionPress}
+          hostId={hostId ? parseInt(hostId, 10) : null}
+          sessionId={sessionId}
         />
       </View>
     </>

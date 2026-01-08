@@ -258,6 +258,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         console.warn('Failed to load session preferences:', error);
       }
 
+      // Load model preference for this session (override or global default)
+      try {
+        await useConfigStore.getState().loadSessionOverride(hostId, sessionId);
+        chatLogger.info('Loaded model preference for session');
+      } catch (error) {
+        console.warn('Failed to load model preference:', error);
+      }
+
       // Fetch available slash commands from server (non-blocking)
       get().fetchCommands();
 
