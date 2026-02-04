@@ -40,15 +40,12 @@ export function Checkbox({ checked, onToggle, disabled = false }: CheckboxProps)
   }, [checked, progress])
 
   const containerStyle = useAnimatedStyle(() => {
-    const backgroundColor = interpolate(
-      progress.value,
-      [0, 1],
-      [0, 1]
-    )
+    // Use threshold comparison instead of strict equality to avoid floating-point precision issues
+    const isChecked = progress.value > 0.5
     
     return {
-      backgroundColor: backgroundColor === 1 ? Colors.primary : 'transparent',
-      borderColor: backgroundColor === 1 ? Colors.primary : Colors.border,
+      backgroundColor: isChecked ? Colors.primary : 'transparent',
+      borderColor: isChecked ? Colors.primary : Colors.border,
     }
   })
 

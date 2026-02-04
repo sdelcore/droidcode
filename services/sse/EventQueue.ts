@@ -100,7 +100,7 @@ export class EventQueue {
    * Determine priority based on event type.
    */
   private getPriority(eventType: string): 'high' | 'normal' {
-    // High priority: start, complete, status, permissions
+    // High priority: start, complete, status, permissions, questions
     if (
       eventType === 'message.start' ||
       eventType === 'message.started' ||
@@ -108,7 +108,10 @@ export class EventQueue {
       eventType === 'message.completed' ||
       eventType === 'session.status' ||
       eventType === 'permission.requested' ||
-      eventType === 'permission.updated'
+      eventType === 'permission.updated' ||
+      eventType === 'question.asked' ||
+      eventType === 'question.replied' ||
+      eventType === 'question.rejected'
     ) {
       return 'high';
     }

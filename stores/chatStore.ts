@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Alert } from 'react-native';
 import type {
   MessageDto,
   MessagePartDto,
@@ -10,6 +11,7 @@ import type {
   Permission,
   SseEvent,
   SlashCommand,
+  QuestionRequest,
 } from '@/types';
 import { BUILT_IN_COMMANDS } from '@/types';
 import { apiClient } from '@/services/api/apiClient';
@@ -80,6 +82,8 @@ interface ChatState {
   isTodosLoading: boolean;
   diffs: FileDiffDto[];
   pendingPermission: Permission | null;
+  pendingQuestion: QuestionRequest | null;
+  questionAnswers: (string[] | null)[];  // Answers for each question (null = unanswered)
   availableCommands: SlashCommand[];  // Slash commands from server + built-in
 
   // Internal cleanup functions (not exposed to components)
@@ -97,10 +101,15 @@ interface ChatState {
   connect: (hostId: number, port?: number) => Promise<string | null>;  // Returns connectionId on success, null on failure
   disconnect: () => void;
   disconnectById: (connectionId: string) => void;  // Disconnect a specific connection (for cleanup)
+  reconnect: () => Promise<void>;  // Retry connection after failure
   setInputText: (text: string) => void;
   setSelectedAgent: (agent: AgentType) => void;
   setThinkingMode: (mode: ThinkingModeType) => void;
-  respondToPermission: (permissionId: string, response: 'accept' | 'accept_always' | 'deny') => Promise<void>;
+  respondToPermission: (permissionId: string, response: 'accept' | 'accept_always' | 'deny', message?: string) => Promise<void>;
+  // Question tool actions
+  setQuestionAnswer: (questionIndex: number, selectedLabels: string[]) => void;
+  submitQuestionAnswers: () => Promise<void>;
+  rejectQuestion: () => Promise<void>;
   abortSession: () => Promise<void>;
   clearError: () => void;
   clearInterruptedState: () => void;
@@ -151,6 +160,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   isTodosLoading: false,
   diffs: [],
   pendingPermission: null,
+  pendingQuestion: null,
+  questionAnswers: [],
   availableCommands: BUILT_IN_COMMANDS,  // Start with built-in commands, fetch server commands later
   canRedo: false,
   _connectionId: null,
@@ -351,15 +362,27 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       const hasImages = images && images.length > 0;
       const responseTimeout = hasImages ? 90000 : 30000;
       
+      // Capture the current session context to validate later
+      const currentSessionId = sessionId;
+      const currentHostId = hostId;
+      
       const timeoutId = setTimeout(() => {
-        if (get().isAwaitingResponse) {
-          console.warn(`[chatStore.sendMessage] No SSE response received after ${responseTimeout / 1000}s`);
+        const state = get();
+        // Only show timeout error if we're still in the same session
+        // This prevents stale timeout errors when switching sessions
+        if (state.isAwaitingResponse && 
+            state.sessionId === currentSessionId && 
+            state.hostId === currentHostId) {
+          console.warn(`[chatStore.sendMessage] No SSE response received after ${responseTimeout / 1000}s for session ${currentSessionId}`);
           set({
             isAwaitingResponse: false,
             error: 'No response received. The connection may have been lost. Try refreshing.',
             pendingUserMessageId: null,  // Clear pending ID on timeout
             _responseTimeoutId: null,
           });
+        } else if (state.sessionId !== currentSessionId) {
+          // Session has changed, just clear the timeout reference silently
+          console.log(`[chatStore.sendMessage] Ignoring timeout for previous session ${currentSessionId}, now in session ${state.sessionId}`);
         }
       }, responseTimeout);
 
@@ -475,8 +498,23 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       }
     });
 
+    // Capture current connection context for validation
+    const currentSessionId = sessionId;
+    const currentHostId = hostId;
+    const currentPort = actualPort;
+    
     // Subscribe to health monitor changes
     const healthMonitorUnsubscribe = healthMonitor.onHealthChange((healthState) => {
+      const state = get();
+      
+      // Only process if we're still in the same session/connection
+      if (state.sessionId !== currentSessionId || 
+          state.hostId !== currentHostId || 
+          state.port !== currentPort) {
+        chatLogger.info(`Ignoring health update for previous session`);
+        return;
+      }
+
       if (healthState.status === 'unhealthy') {
         chatLogger.warn(`Health monitor detected unhealthy server: ${healthState.error}`);
         set({
@@ -486,6 +524,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
             message: healthState.error || 'Server health check failed',
           },
         });
+      } else if (healthState.status === 'healthy') {
+        // Server is reachable again - check if we need to reconnect
+        const currentConnState = state.connectionState;
+        if (currentConnState.status === 'error' || currentConnState.status === 'disconnected') {
+          chatLogger.info('Health recovered and connection is down - triggering reconnection');
+          // Reset attempt counter and reconnect immediately
+          if (state._connectionId) {
+            sseConnectionManager.retryConnection(state._connectionId);
+          }
+        }
       }
     });
 
@@ -584,6 +632,25 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     });
   },
 
+  reconnect: async () => {
+    const { hostId, port, sessionId, _connectionId } = get();
+    
+    if (!hostId || !sessionId) {
+      chatLogger.warn('[chatStore.reconnect] Cannot reconnect: no active session');
+      return;
+    }
+
+    chatLogger.info(`[chatStore.reconnect] Attempting to reconnect session ${sessionId}`);
+    
+    // If we have an existing connection, try to retry it first
+    if (_connectionId) {
+      sseConnectionManager.retryConnection(_connectionId);
+    } else {
+      // No existing connection, create a new one
+      await get().connect(hostId, port ?? undefined);
+    }
+  },
+
   setInputText: async (text) => {
     set({ inputText: text });
     const { sessionId, hostId, selectedAgent, thinkingMode } = get();
@@ -638,15 +705,52 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   },
 
-  respondToPermission: async (permissionId, response) => {
-    const { hostId, sessionId, port } = get();
-    if (!hostId || !sessionId) return;
+  respondToPermission: async (permissionId, response, message) => {
+    const { hostId, port } = get();
+    if (!hostId) return;
 
     try {
-      await apiClient.respondToPermission(hostId, sessionId, permissionId, response, port ?? undefined);
+      await apiClient.respondToPermission(hostId, permissionId, response, message, port ?? undefined);
       set({ pendingPermission: null });
     } catch (error) {
       console.error('Failed to respond to permission:', error);
+      Alert.alert('Error', 'Failed to respond to permission. Please try again.');
+    }
+  },
+
+  // Question tool actions
+  setQuestionAnswer: (questionIndex, selectedLabels) => {
+    const { questionAnswers } = get();
+    const newAnswers = [...questionAnswers];
+    newAnswers[questionIndex] = selectedLabels;
+    set({ questionAnswers: newAnswers });
+  },
+
+  submitQuestionAnswers: async () => {
+    const { hostId, port, pendingQuestion, questionAnswers } = get();
+    if (!hostId || !pendingQuestion) return;
+
+    try {
+      // Filter out null answers and convert to the expected format
+      const answers = questionAnswers.map((a) => a || []);
+      await apiClient.replyToQuestion(hostId, pendingQuestion.id, answers, port ?? undefined);
+      set({ pendingQuestion: null, questionAnswers: [] });
+    } catch (error) {
+      console.error('Failed to submit question answers:', error);
+      Alert.alert('Error', 'Failed to submit answers. Please try again.');
+    }
+  },
+
+  rejectQuestion: async () => {
+    const { hostId, port, pendingQuestion } = get();
+    if (!hostId || !pendingQuestion) return;
+
+    try {
+      await apiClient.rejectQuestion(hostId, pendingQuestion.id, port ?? undefined);
+      set({ pendingQuestion: null, questionAnswers: [] });
+    } catch (error) {
+      console.error('Failed to reject question:', error);
+      Alert.alert('Error', 'Failed to dismiss question. Please try again.');
     }
   },
 
@@ -837,13 +941,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     try {
       const todos = await apiClient.getTodos(hostId, sessionId, port);
-      chatLogger.info(`Fetched ${todos.length} todos for session ${sessionId}`);
-      set({ todos, isTodosLoading: false });
+      // Ensure todos is always an array even if something unexpected happens
+      const safeTodos = Array.isArray(todos) ? todos : [];
+      chatLogger.info(`Fetched ${safeTodos.length} todos for session ${sessionId}`);
+      set({ todos: safeTodos, isTodosLoading: false });
     } catch (error) {
       // Non-blocking error - todos are nice-to-have, not critical
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       chatLogger.warn(`Failed to fetch todos: ${errorMsg}`);
-      set({ isTodosLoading: false });
+      set({ todos: [], isTodosLoading: false });
       // Don't set error state - this is a non-critical failure
     }
   },
@@ -992,11 +1098,39 @@ function handleSseEvent(
       }
       break;
 
+    case 'question.asked':
+      if (event.sessionId !== sessionId) return;
+      // Initialize answers array with nulls for each question
+      set({
+        pendingQuestion: {
+          id: event.requestId,
+          sessionId: event.sessionId,
+          questions: event.questions,
+          tool: event.tool,
+        },
+        questionAnswers: new Array(event.questions.length).fill(null),
+      });
+      break;
+
+    case 'question.replied':
+    case 'question.rejected':
+      // Clear pending question when answered/rejected (locally or from another client)
+      if (event.sessionId !== sessionId) return;
+      const { pendingQuestion } = get();
+      if (pendingQuestion && pendingQuestion.id === event.requestId) {
+        set({ pendingQuestion: null, questionAnswers: [] });
+      }
+      break;
+
     case 'session.status': {
       if (event.sessionId !== sessionId) return;
       const wasSessionBusy = get().isSessionBusy;
       const isNowIdle = event.status === 'idle';
       const isBusy = event.status === 'busy';
+      
+      chatLogger.info(
+        `[session.status] Received status event for ${sessionId}: ${event.status} (was: ${wasSessionBusy ? 'busy' : 'idle'})`
+      );
       
       set({ isSessionBusy: isBusy });
 
@@ -1262,6 +1396,24 @@ function handleMessageComplete(
     if (turnComplete) {
       healthMonitor.stop();
       chatLogger.debug('Stopped health monitoring - non-streaming turn complete');
+      
+      // Optimistically set session to idle for non-streaming messages too
+      const { sessionId } = get();
+      if (sessionId) {
+        chatLogger.debug(`[message.complete] Optimistically setting session ${sessionId} to idle (non-streaming)`);
+        useSessionStore.getState().updateSessionStatus(sessionId, false);
+        
+        // Set a timeout to ensure we don't have a stuck busy state
+        setTimeout(() => {
+          const sessionMeta = useSessionStore.getState().getSessionMetadata(sessionId);
+          if (sessionMeta?.isBusy) {
+            chatLogger.warn(
+              `[message.complete] Session ${sessionId} still busy after 3s timeout (non-streaming), forcing idle`
+            );
+            useSessionStore.getState().updateSessionStatus(sessionId, false);
+          }
+        }, 3000);
+      }
     }
     
     set({
@@ -1286,6 +1438,24 @@ function handleMessageComplete(
   if (turnComplete) {
     healthMonitor.stop();
     chatLogger.debug('Stopped health monitoring - streaming complete');
+    
+    // Optimistically set session to idle to immediately update the UI
+    const { sessionId } = get();
+    if (sessionId) {
+      chatLogger.debug(`[message.complete] Optimistically setting session ${sessionId} to idle`);
+      useSessionStore.getState().updateSessionStatus(sessionId, false);
+      
+      // Set a timeout to ensure we don't have a stuck busy state if server event is missed
+      setTimeout(() => {
+        const sessionMeta = useSessionStore.getState().getSessionMetadata(sessionId);
+        if (sessionMeta?.isBusy) {
+          chatLogger.warn(
+            `[message.complete] Session ${sessionId} still busy after 3s timeout, forcing idle`
+          );
+          useSessionStore.getState().updateSessionStatus(sessionId, false);
+        }
+      }, 3000); // 3 second timeout
+    }
   }
 
   set({

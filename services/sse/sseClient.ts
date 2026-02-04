@@ -14,6 +14,9 @@ import type {
   ErrorEventData,
   MessagePartUpdatedData,
   MessageStartedData,
+  QuestionAskedEventData,
+  QuestionRepliedEventData,
+  QuestionRejectedEventData,
 } from '@/types';
 import { sseLogger } from '@/services/debug';
 
@@ -190,6 +193,23 @@ export class SseClient {
     console.log('[SSE] Reconnecting...', this.lastEventId ? `from event ${this.lastEventId}` : '');
     this.isManualDisconnect = false;
     this.reconnectAttempts = 0;
+    this.doConnect();
+  }
+
+  /**
+   * Retry connection after giving up due to max attempts or error state.
+   * Resets attempt counter and immediately tries to reconnect.
+   * Use this when network connectivity is restored.
+   */
+  retryConnection(): void {
+    if (!this.baseUrl) {
+      console.log(`[SSE:${this._connectionId}] Cannot retry: no baseUrl`);
+      return;
+    }
+
+    console.log(`[SSE:${this._connectionId}] Retry requested - resetting attempts and reconnecting`);
+    this.reconnectAttempts = 0;
+    this.isManualDisconnect = false;
     this.doConnect();
   }
 
@@ -589,6 +609,50 @@ export class SseClient {
           sessionId: data.properties?.sessionID || data.sessionId,
           command: data.properties?.command || data.command,
         };
+
+      // Question events (AI asking user questions)
+      case 'question.asked': {
+        const d = data as QuestionAskedEventData;
+        return {
+          type: 'question.asked',
+          sessionId: d.properties.sessionID,
+          requestId: d.properties.id,
+          questions: d.properties.questions.map((q) => ({
+            question: q.question,
+            header: q.header,
+            options: q.options.map((o) => ({
+              label: o.label,
+              description: o.description,
+            })),
+            multiple: q.multiple,
+          })),
+          tool: d.properties.tool
+            ? {
+                messageId: d.properties.tool.messageID,
+                callId: d.properties.tool.callID,
+              }
+            : undefined,
+        };
+      }
+
+      case 'question.replied': {
+        const d = data as QuestionRepliedEventData;
+        return {
+          type: 'question.replied',
+          sessionId: d.properties.sessionID,
+          requestId: d.properties.requestID,
+          answers: d.properties.answers,
+        };
+      }
+
+      case 'question.rejected': {
+        const d = data as QuestionRejectedEventData;
+        return {
+          type: 'question.rejected',
+          sessionId: d.properties.sessionID,
+          requestId: d.properties.requestID,
+        };
+      }
 
       default:
         return {

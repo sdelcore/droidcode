@@ -220,11 +220,33 @@ export interface TodoListResponse {
 }
 
 // ============================================================================
-// Permission DTOs
+// Question DTOs (AI asking user questions)
 // ============================================================================
 
-export interface PermissionReplyRequest {
-  response: 'accept' | 'accept_always' | 'deny';
+export interface QuestionOptionDto {
+  label: string;
+  description: string;
+}
+
+export interface QuestionInfoDto {
+  question: string;
+  header: string;
+  options: QuestionOptionDto[];
+  multiple?: boolean;
+}
+
+export interface QuestionRequestDto {
+  id: string;
+  sessionID: string;
+  questions: QuestionInfoDto[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+}
+
+export interface QuestionReplyRequest {
+  answers: string[][];
 }
 
 // ============================================================================

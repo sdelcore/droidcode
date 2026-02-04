@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { StyleSheet, FlatList, Pressable, RefreshControl, AppState } from 'react-native';
+import { StyleSheet, FlatList, SectionList, Pressable, RefreshControl, AppState } from 'react-native';
 import { router, useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -8,12 +8,14 @@ import { Text, View } from '@/components/Themed';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { BrailleSpinner } from '@/components/feedback/BrailleSpinner';
-import { AgentModeBadge } from '@/components/sessions/AgentModeBadge';
 import { SwipeableListItem } from '@/components/shared/SwipeableListItem';
 import { Checkbox } from '@/components/shared/Checkbox';
 import { ConfirmDialog } from '@/components/dialogs/ConfirmDialog';
 import { RenameDialog } from '@/components/dialogs/RenameDialog';
+import { FilterBar, SortOptionsModal, SessionGroupHeader, SessionEmptyState } from '@/components/filters';
 import { Colors, Spacing, BorderRadius, FontSize, FontFamily, getAgentColor } from '@/constants/Theme';
+import { getWorkflowPriority, WORKFLOW_GROUP_LABELS } from '@/types/domain';
+import type { AgentFilter, StatusFilter } from '@/types/domain';
 
 type Session = {
   id: string;
@@ -41,7 +43,16 @@ export default function SessionListScreen() {
   const deleteSession = useSessionStore((state) => state.deleteSession);
   const deleteMultipleSessions = useSessionStore((state) => state.deleteMultipleSessions);
   const renameSession = useSessionStore((state) => state.renameSession);
-  const getSessionMetadata = useSessionStore((state) => state.getSessionMetadata);
+  
+  // Filter state
+  const filters = useSessionStore((state) => state.filters);
+  const filtersLoaded = useSessionStore((state) => state.filtersLoaded);
+  const loadFilters = useSessionStore((state) => state.loadFilters);
+  const toggleAgentFilter = useSessionStore((state) => state.toggleAgentFilter);
+  const toggleStatusFilter = useSessionStore((state) => state.toggleStatusFilter);
+  const setSortPreset = useSessionStore((state) => state.setSortPreset);
+  const clearFilters = useSessionStore((state) => state.clearFilters);
+  const getFilteredSessions = useSessionStore((state) => state.getFilteredSessions);
   
   const projects = useProjectStore((state) => state.projects);
 
@@ -64,6 +75,54 @@ export default function SessionListScreen() {
 
   // Fire-and-forget refresh: show spinner briefly, then dismiss while fetch continues
   const [showRefreshSpinner, setShowRefreshSpinner] = useState(false);
+  
+  // Sort modal state
+  const [showSortModal, setShowSortModal] = useState(false);
+  
+  // Get filtered and sorted sessions
+  const filteredSessions = useMemo(() => getFilteredSessions(), [
+    sessions,
+    sessionMetadata,
+    filters,
+    getFilteredSessions,
+  ]);
+  
+  // Group sessions for workflow sort (with section headers)
+  const groupedSessions = useMemo(() => {
+    if (filters.sortPreset !== 'workflow') {
+      // Single section for non-workflow sorts
+      return [{ title: '', data: filteredSessions, key: 'all' }];
+    }
+    
+    // Group by workflow priority
+    const groups: Record<string, Session[]> = {};
+    
+    for (const session of filteredSessions) {
+      const agent = sessionMetadata[session.id]?.lastAgent;
+      const isRunning = sessionMetadata[session.id]?.isBusy ?? false;
+      const agentKey = agent === 'plan' || agent === 'build' ? agent : 'other';
+      const statusKey = isRunning ? 'running' : 'completed';
+      const groupKey = `${agentKey}-${statusKey}`;
+      
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+      groups[groupKey].push(session);
+    }
+    
+    // Sort groups by workflow priority and filter out empty ones
+    const sortedGroupKeys = Object.keys(groups).sort((a, b) => {
+      const priorityA = getWorkflowPriority(a.split('-')[0], a.endsWith('running'));
+      const priorityB = getWorkflowPriority(b.split('-')[0], b.endsWith('running'));
+      return priorityA - priorityB;
+    });
+    
+    return sortedGroupKeys.map((key) => ({
+      title: WORKFLOW_GROUP_LABELS[key] || key,
+      data: groups[key],
+      key,
+    }));
+  }, [filteredSessions, sessionMetadata, filters.sortPreset]);
 
   // Debounced fetch to prevent duplicate calls
   const debouncedFetchSessions = useCallback(() => {
@@ -90,6 +149,13 @@ export default function SessionListScreen() {
     setTimeout(() => setShowRefreshSpinner(false), 500);
   }, [hostId, project?.port, fetchSessions]);
 
+  // Load filter preferences on mount
+  useEffect(() => {
+    if (!filtersLoaded) {
+      loadFilters();
+    }
+  }, [filtersLoaded, loadFilters]);
+  
   // Initial load
   useEffect(() => {
     if (hostId && project) {
@@ -249,10 +315,31 @@ export default function SessionListScreen() {
     return date.toLocaleDateString();
   }, []);
 
+  // Filter handlers
+  const handleToggleAgent = useCallback((agent: AgentFilter) => {
+    toggleAgentFilter(agent);
+  }, [toggleAgentFilter]);
+
+  const handleToggleStatus = useCallback((status: StatusFilter) => {
+    toggleStatusFilter(status);
+  }, [toggleStatusFilter]);
+
+  const handleSortPress = useCallback(() => {
+    setShowSortModal(true);
+  }, []);
+
+  const handleSortSelect = useCallback((preset: typeof filters.sortPreset) => {
+    setSortPreset(preset);
+  }, [setSortPreset]);
+
+  const handleClearFilters = useCallback(() => {
+    clearFilters();
+  }, [clearFilters]);
+
   // Memoize renderItem to prevent recreating on every render
   const renderItem = useCallback(({ item }: { item: Session }) => {
     const childCount = childSessions[item.id]?.length || 0;
-    const metadata = getSessionMetadata(item.id);
+    const metadata = sessionMetadata[item.id];
     const agentColor = getAgentColor(metadata?.lastAgent);
     const isSelected = selectedSessionIds.has(item.id);
     
@@ -339,7 +426,19 @@ export default function SessionListScreen() {
         </View>
       </View>
     );
-  }, [childSessions, sessionMetadata, getSessionMetadata, formatTime, isSelectionMode, selectedSessionIds]);
+  }, [
+    childSessions,
+    sessionMetadata,
+    formatTime,
+    isSelectionMode,
+    selectedSessionIds,
+    toggleSessionSelection,
+    handleSessionPress,
+    handleSessionLongPress,
+    setDeleteDialogSession,
+    handleViewSession,
+    handleRenameSession,
+  ]);
 
   return (
     <>
@@ -359,33 +458,74 @@ export default function SessionListScreen() {
       />
 
       <View style={styles.container}>
-        <FlatList
-          data={sessions}
-          keyExtractor={(item) => item.id}
-          refreshControl={
-            <RefreshControl
-              refreshing={showRefreshSpinner}
-              onRefresh={handleRefresh}
-            />
-          }
-          renderItem={renderItem}
-          ListEmptyComponent={
-            !isLoading ? (
-              <View style={styles.emptyContainer}>
-                <MaterialCommunityIcons
-                  name="chat-outline"
-                  size={64}
-                  color={Colors.textMuted}
-                />
-                <Text style={styles.emptyText}>No sessions yet</Text>
-                <Text style={styles.emptySubtext}>
-                  Start a new conversation
-                </Text>
-              </View>
-            ) : null
-          }
-          contentContainerStyle={sessions.length === 0 ? styles.emptyList : undefined}
+        {/* Filter Bar */}
+        <FilterBar
+          filters={filters}
+          onToggleAgent={handleToggleAgent}
+          onToggleStatus={handleToggleStatus}
+          onSortPress={handleSortPress}
         />
+        
+        {/* Session List */}
+        {filters.sortPreset === 'workflow' ? (
+          <SectionList
+            sections={groupedSessions}
+            keyExtractor={(item) => item.id}
+            refreshControl={
+              <RefreshControl
+                refreshing={showRefreshSpinner}
+                onRefresh={handleRefresh}
+              />
+            }
+            renderItem={renderItem}
+            renderSectionHeader={({ section }) => 
+              section.title ? (
+                <SessionGroupHeader label={section.title} count={section.data.length} />
+              ) : null
+            }
+            extraData={{
+              selectedSessionIds,
+              isSelectionMode,
+              childSessions,
+              sessionMetadata
+            }}
+            ListEmptyComponent={
+              <SessionEmptyState
+                filters={filters}
+                onClearFilters={handleClearFilters}
+                isLoading={isLoading}
+              />
+            }
+            contentContainerStyle={filteredSessions.length === 0 ? styles.emptyList : undefined}
+            stickySectionHeadersEnabled={false}
+          />
+        ) : (
+          <FlatList
+            data={filteredSessions}
+            keyExtractor={(item) => item.id}
+            refreshControl={
+              <RefreshControl
+                refreshing={showRefreshSpinner}
+                onRefresh={handleRefresh}
+              />
+            }
+            renderItem={renderItem}
+            extraData={{
+              selectedSessionIds,
+              isSelectionMode,
+              childSessions,
+              sessionMetadata
+            }}
+            ListEmptyComponent={
+              <SessionEmptyState
+                filters={filters}
+                onClearFilters={handleClearFilters}
+                isLoading={isLoading}
+              />
+            }
+            contentContainerStyle={filteredSessions.length === 0 ? styles.emptyList : undefined}
+          />
+        )}
 
         {/* Show delete FAB in selection mode, otherwise new session FAB */}
         {isSelectionMode && selectedSessionIds.size > 0 ? (
@@ -448,6 +588,14 @@ export default function SessionListScreen() {
               setDeleteDialogSession(null);
             }
           }}
+        />
+        
+        {/* Sort Options Modal */}
+        <SortOptionsModal
+          visible={showSortModal}
+          currentSort={filters.sortPreset}
+          onSelect={handleSortSelect}
+          onClose={() => setShowSortModal(false)}
         />
       </View>
     </>
@@ -539,22 +687,6 @@ const styles = StyleSheet.create({
   deletions: {
     color: Colors.diffRemoved,
     fontFamily: FontFamily.mono,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: Spacing.xxxl,
-  },
-  emptyText: {
-    fontSize: FontSize.xl,
-    fontWeight: '600',
-    marginTop: Spacing.lg,
-    color: Colors.text,
-  },
-  emptySubtext: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-    marginTop: Spacing.sm,
   },
   emptyList: {
     flex: 1,

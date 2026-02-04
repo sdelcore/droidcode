@@ -1,0 +1,1 @@
+export { filterPreferencesService } from './filterPreferences'

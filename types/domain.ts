@@ -190,6 +190,49 @@ export interface Permission {
 }
 
 // ============================================================================
+// Question (AI asking user questions)
+// ============================================================================
+
+/**
+ * A single option for a question.
+ */
+export interface QuestionOption {
+  label: string;        // Display text (1-5 words, concise)
+  description: string;  // Explanation of this choice
+}
+
+/**
+ * A single question with options.
+ */
+export interface QuestionInfo {
+  question: string;     // Complete question text
+  header: string;       // Short label (max 12 chars)
+  options: QuestionOption[];
+  multiple?: boolean;   // Allow selecting multiple choices
+}
+
+/**
+ * Full question request from the server.
+ */
+export interface QuestionRequest {
+  id: string;           // Question request ID (e.g., "question_xxx")
+  sessionId: string;
+  questions: QuestionInfo[];
+  tool?: {
+    messageId: string;
+    callId: string;
+  };
+}
+
+/**
+ * Reply payload for answering questions.
+ * Each inner array contains the selected label(s) for that question.
+ */
+export interface QuestionReply {
+  answers: string[][];
+}
+
+// ============================================================================
 // Slash Command
 // ============================================================================
 
@@ -232,3 +275,106 @@ export interface MessageGroup {
   agent?: string;       // Agent name for header (from first message)
   isStreaming: boolean; // True if last message is currently streaming
 }
+
+// ============================================================================
+// Session Filters & Sorting
+// ============================================================================
+
+/**
+ * Available sort presets for the session list.
+ */
+export type SortPreset = 'recent' | 'workflow' | 'created' | 'duration' | 'files' | 'alpha';
+
+/**
+ * Available agent filter types.
+ */
+export type AgentFilter = 'plan' | 'build';
+
+/**
+ * Available status filter types.
+ */
+export type StatusFilter = 'running' | 'completed';
+
+/**
+ * Session filter state containing all active filters and sort preferences.
+ */
+export interface SessionFilters {
+  agents: Set<AgentFilter>;
+  statuses: Set<StatusFilter>;
+  sortPreset: SortPreset;
+}
+
+/**
+ * Default filter state - no filters active, sorted by recent.
+ */
+export const DEFAULT_SESSION_FILTERS: SessionFilters = {
+  agents: new Set(),
+  statuses: new Set(),
+  sortPreset: 'recent',
+};
+
+/**
+ * Serializable version of SessionFilters for persistence.
+ */
+export interface SerializedSessionFilters {
+  agents: AgentFilter[];
+  statuses: StatusFilter[];
+  sortPreset: SortPreset;
+}
+
+/**
+ * Convert SessionFilters to a serializable format.
+ */
+export function serializeFilters(filters: SessionFilters): SerializedSessionFilters {
+  return {
+    agents: Array.from(filters.agents),
+    statuses: Array.from(filters.statuses),
+    sortPreset: filters.sortPreset,
+  };
+}
+
+/**
+ * Convert serialized filters back to SessionFilters.
+ */
+export function deserializeFilters(serialized: SerializedSessionFilters): SessionFilters {
+  return {
+    agents: new Set(serialized.agents),
+    statuses: new Set(serialized.statuses),
+    sortPreset: serialized.sortPreset,
+  };
+}
+
+/**
+ * Workflow sort priority - lower number = higher priority.
+ * Order: Plan completed -> Plan running -> Build running -> Build completed -> Others
+ */
+export const WORKFLOW_PRIORITY: Record<string, number> = {
+  'plan-completed': 1,
+  'plan-running': 2,
+  'build-running': 3,
+  'build-completed': 4,
+  'other-running': 5,
+  'other-completed': 6,
+};
+
+/**
+ * Get workflow priority for a session based on agent and running status.
+ */
+export function getWorkflowPriority(agent: string | undefined, isRunning: boolean): number {
+  const status = isRunning ? 'running' : 'completed';
+  const agentKey = agent === 'plan' || agent === 'build' ? agent : 'other';
+  const key = `${agentKey}-${status}`;
+  return WORKFLOW_PRIORITY[key] ?? 6;
+}
+
+/**
+ * Labels for workflow groups displayed as section headers.
+ */
+export const WORKFLOW_GROUP_LABELS: Record<string, string> = {
+  'plan-completed': 'Completed Plans',
+  'plan-running': 'Active Plans',
+  'build-running': 'Active Builds',
+  'build-completed': 'Completed Builds',
+  'other-running': 'Other Active',
+  'other-completed': 'Other Completed',
+};

@@ -3,7 +3,7 @@
  * Displays messages, handles streaming, and manages session state.
  */
 
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, forwardRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import Animated, { useAnimatedReaction, runOnJS } from 'react-native-reanimated';
-import { useReanimatedKeyboardAnimation, KeyboardStickyView } from 'react-native-keyboard-controller';
+import { useReanimatedKeyboardAnimation, KeyboardStickyView, KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useHeaderHeight } from '@react-navigation/elements';
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, Stack, router, useFocusEffect } from 'expo-router';
@@ -41,7 +41,7 @@ import {
 } from '@/components/chat';
 import type { MessageGroup as MessageGroupType, ThinkingModeType } from '@/types';
 import { TodoPanelCompact } from '@/components/panels';
-import { PermissionDialog } from '@/components/dialogs';
+import { PermissionBanner, QuestionBanner } from '@/components/dialogs';
 import { SessionMenu } from '@/components/menus';
 import { modelPreferencesRepository } from '@/services/db/repositories/modelPreferencesRepository';
 import {
@@ -51,7 +51,23 @@ import {
   TypingIndicator,
   InterruptBanner,
   ScrollToBottomButton,
+  StreamingIndicatorBar,
 } from '@/components/feedback';
+
+/**
+ * Scroll component for FlashList that integrates with KeyboardAwareScrollView.
+ * This ensures the message list adjusts its content inset when the keyboard opens.
+ */
+const RenderScrollComponent = forwardRef<any, any>((props, ref) => (
+  <KeyboardAwareScrollView {...props} ref={ref} />
+));
+
+/**
+ * Minimum height for Android gesture navigation area.
+ * Modern Android devices with gesture navigation have an area at the bottom
+ * that needs additional padding even when navigation bar is hidden.
+ */
+const ANDROID_GESTURE_AREA_MIN_HEIGHT = 20;
 
 /**
  * Calculate Android navigation bar height for edge-to-edge mode.
@@ -67,7 +83,11 @@ function getNavigationBarHeight(): number {
   
   // System bars height = screen height - window height
   // Navigation bar height = total system bars - status bar
-  return Math.max(0, (screen.height - window.height) - statusBarHeight);
+  const navBarHeight = Math.max(0, (screen.height - window.height) - statusBarHeight);
+  
+  // Ensure minimum height for gesture navigation on Android 10+
+  // This accounts for the gesture area that isn't included in navigation bar height
+  return Math.max(navBarHeight, ANDROID_GESTURE_AREA_MIN_HEIGHT);
 }
 
 export default function ChatScreen() {
@@ -144,6 +164,8 @@ export default function ChatScreen() {
     todos,
     isTodosLoading,
     pendingPermission,
+    pendingQuestion,
+    questionAnswers,
     isAssistantTurnActive,
     isSessionBusy,
     setInputText,
@@ -154,6 +176,9 @@ export default function ChatScreen() {
     disconnectById,
     loadSession,
     respondToPermission,
+    setQuestionAnswer,
+    submitQuestionAnswers,
+    rejectQuestion,
     abortSession,
     clearError,
     executeSlashCommand,
@@ -438,11 +463,27 @@ export default function ChatScreen() {
   );
 
   const handlePermissionRespond = useCallback(
-    (permissionId: string, response: 'accept' | 'accept_always' | 'deny') => {
-      respondToPermission(permissionId, response);
+    (permissionId: string, response: 'accept' | 'accept_always' | 'deny', message?: string) => {
+      respondToPermission(permissionId, response, message);
     },
     [respondToPermission]
   );
+
+  // Question handlers
+  const handleQuestionAnswerChange = useCallback(
+    (questionIndex: number, selectedLabels: string[]) => {
+      setQuestionAnswer(questionIndex, selectedLabels);
+    },
+    [setQuestionAnswer]
+  );
+
+  const handleQuestionSubmit = useCallback(() => {
+    submitQuestionAnswers();
+  }, [submitQuestionAnswers]);
+
+  const handleQuestionReject = useCallback(() => {
+    rejectQuestion();
+  }, [rejectQuestion]);
 
   const handleRevert = useCallback(
     (messageId: string) => {
@@ -507,12 +548,13 @@ export default function ChatScreen() {
     return groups;
   }, [messages, streamingMessage]);
 
-  // Dynamic content container style - removes bottom padding when keyboard is visible
+  // Content container style with bottom padding for input area
+  // KeyboardAwareScrollView handles additional offset when keyboard is visible
   const messageListContentStyle = useMemo(() => ({
     flexGrow: 1,
     padding: Spacing.md,
-    paddingBottom: isKeyboardVisible ? 0 : Spacing.sm,
-  }), [isKeyboardVisible]);
+    paddingBottom: Spacing.sm + 80, // 80px for input area height
+  }), []);
 
   const renderGroup = useCallback(
     ({ item }: { item: MessageGroupType }) => {
@@ -570,9 +612,14 @@ export default function ChatScreen() {
   }, [thinkingMode, setThinkingMode]);
 
   const handleInterrupt = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    console.log('[ChatScreen] Interrupt requested');
     abortSession();
   }, [abortSession]);
+
+  const handleRetryConnection = useCallback(() => {
+    console.log('[ChatScreen] Manual retry requested');
+    useChatStore.getState().reconnect();
+  }, []);
 
   const handleModelSelect = useCallback(
     (providerId: string, modelId: string) => {
@@ -645,12 +692,9 @@ export default function ChatScreen() {
   }, [isLoading]);
 
   const ListFooterComponent = useCallback(() => {
-    // Show typing indicator when waiting for response OR during assistant turn before streaming starts
-    if (isAwaitingResponse || (isAssistantTurnActive && !streamingMessage)) {
-      return <TypingIndicator agent={selectedAgent} />;
-    }
+    // No longer show typing indicator here since we have the persistent StreamingIndicatorBar
     return null;
-  }, [isAwaitingResponse, isAssistantTurnActive, streamingMessage, selectedAgent]);
+  }, []);
 
   return (
     <>
@@ -704,7 +748,7 @@ export default function ChatScreen() {
                   </View>
                 </Pressable>
               ) : (
-                <ConnectionStatus state={connectionState} compact />
+                <ConnectionStatus state={connectionState} compact onRetry={handleRetryConnection} />
               )}
             </View>
           ),
@@ -748,6 +792,7 @@ export default function ChatScreen() {
           extraData={streamingContentKey}
           keyExtractor={keyExtractor}
           renderItem={renderGroup}
+          renderScrollComponent={RenderScrollComponent}
           contentContainerStyle={messageListContentStyle}
           ListHeaderComponent={ListHeaderComponent}
           ListEmptyComponent={ListEmptyComponent}
@@ -767,8 +812,36 @@ export default function ChatScreen() {
           bottomOffset={isKeyboardVisible ? 0 : bottomInset}
         />
 
-        {/* Input */}
-        <KeyboardStickyView offset={{ closed: bottomInset, opened: 0 }}>
+        {/* Streaming Indicator Bar */}
+        <StreamingIndicatorBar
+          visible={isAwaitingResponse || (isAssistantTurnActive && streamingMessage !== null)}
+          agent={selectedAgent}
+          bottomOffset={isKeyboardVisible ? 80 : bottomInset + 80}
+        />
+
+        {/* Input with Permission/Question Banner */}
+        <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
+          {/* Permission Banner - Fixed above input */}
+          {pendingPermission && (
+            <View style={styles.permissionContainer}>
+              <PermissionBanner
+                permission={pendingPermission}
+                onRespond={handlePermissionRespond}
+              />
+            </View>
+          )}
+          {/* Question Banner - Fixed above input (when no permission pending) */}
+          {!pendingPermission && pendingQuestion && (
+            <View style={styles.permissionContainer}>
+              <QuestionBanner
+                question={pendingQuestion}
+                answers={questionAnswers}
+                onAnswerChange={handleQuestionAnswerChange}
+                onSubmit={handleQuestionSubmit}
+                onReject={handleQuestionReject}
+              />
+            </View>
+          )}
           <ChatInput
             value={inputText}
             onChangeText={setInputText}
@@ -781,15 +854,9 @@ export default function ChatScreen() {
             onAgentChange={setSelectedAgent}
             thinkingMode={thinkingMode}
             onThinkingModeChange={setThinkingMode}
-            bottomInset={0}
+            bottomInset={bottomInset}
           />
         </KeyboardStickyView>
-
-        {/* Permission Dialog */}
-        <PermissionDialog
-          permission={pendingPermission}
-          onRespond={handlePermissionRespond}
-        />
 
         {/* Session Menu */}
         <SessionMenu
@@ -835,6 +902,10 @@ const styles = StyleSheet.create({
   },
   todosContainer: {
     marginBottom: Spacing.md,
+  },
+  permissionContainer: {
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
   },
   loadingContainer: {
     flex: 1,

@@ -19,6 +19,7 @@ import type {
   ProviderStatusDto,
   SessionUpdateRequest,
   SessionStatusDto,
+  QuestionRequestDto,
 } from '@/types';
 
 import { THINKING_MODES } from '@/types';
@@ -334,8 +335,15 @@ class ApiClient {
   // Todos
   async getTodos(hostId: number, sessionId: string, port?: number): Promise<TodoDto[]> {
     const client = this.getClient(hostId, port);
-    const response = await client.get<{ todos: TodoDto[] }>(`/session/${sessionId}/todo`);
-    return response.data.todos;
+    try {
+      const response = await client.get<TodoDto[]>(`/session/${sessionId}/todo`);
+      // Ensure we always return an array, even if the response is null/undefined
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (error) {
+      // Log the error but return empty array to prevent UI crashes
+      console.error('Failed to fetch todos:', error);
+      return [];
+    }
   }
 
   // Diffs
@@ -346,11 +354,16 @@ class ApiClient {
   }
 
   // Permissions
+  /**
+   * Respond to a permission request.
+   * Uses the new /permission/:requestID/reply endpoint.
+   * @param message Optional feedback message when rejecting
+   */
   async respondToPermission(
     hostId: number,
-    sessionId: string,
     permissionId: string,
     response: PermissionResponse,
+    message?: string,
     port?: number,
     signal?: AbortSignal
   ): Promise<void> {
@@ -362,9 +375,15 @@ class ApiClient {
       'accept_always': 'always',
       'deny': 'reject',
     };
-    const apiResponse = apiResponseMap[response];
+    const reply = apiResponseMap[response];
 
-    await this.fetchPost(hostId, `/session/${sessionId}/permissions/${permissionId}`, { response: apiResponse }, port, 30000, signal);
+    // Build request body - only include message if provided and rejecting
+    const body: { reply: string; message?: string } = { reply };
+    if (message && response === 'deny') {
+      body.message = message;
+    }
+
+    await this.fetchPost(hostId, `/permission/${permissionId}/reply`, body, port, 30000, signal);
   }
 
   // Files (for autocomplete)
@@ -472,6 +491,57 @@ class ApiClient {
   ): Promise<void> {
     const client = this.getClient(hostId, port);
     await client.patch(`/session/${sessionId}`, data);
+  }
+
+  // ==================== QUESTION TOOL ====================
+
+  /**
+   * List pending questions from the AI agent.
+   */
+  async listQuestions(hostId: number, port?: number): Promise<QuestionRequestDto[]> {
+    const client = this.getClient(hostId, port);
+    const response = await client.get<QuestionRequestDto[]>('/question');
+    return response.data;
+  }
+
+  /**
+   * Reply to a question request with answers.
+   * @param answers Array of arrays - each inner array contains the selected label(s) for that question
+   */
+  async replyToQuestion(
+    hostId: number,
+    requestId: string,
+    answers: string[][],
+    port?: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.fetchPost(
+      hostId,
+      `/question/${requestId}/reply`,
+      { answers },
+      port,
+      30000,
+      signal
+    );
+  }
+
+  /**
+   * Reject/dismiss a question request.
+   */
+  async rejectQuestion(
+    hostId: number,
+    requestId: string,
+    port?: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.fetchPost(
+      hostId,
+      `/question/${requestId}/reject`,
+      {},
+      port,
+      30000,
+      signal
+    );
   }
 }
 

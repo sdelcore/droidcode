@@ -27,3 +27,4 @@ export {
 export { InterruptBanner } from './InterruptBanner';
 export { StaleStreamBanner } from './StaleStreamBanner';
 export { ScrollToBottomButton } from './ScrollToBottomButton';
+export { StreamingIndicatorBar } from './StreamingIndicatorBar';

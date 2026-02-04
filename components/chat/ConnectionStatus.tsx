@@ -4,7 +4,7 @@
  */
 
 import { useEffect } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, Pressable } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
@@ -21,9 +21,10 @@ import { ConnectionState } from '@/types';
 interface ConnectionStatusProps {
   state: ConnectionState;
   compact?: boolean;
+  onRetry?: () => void;
 }
 
-export function ConnectionStatus({ state, compact = false }: ConnectionStatusProps) {
+export function ConnectionStatus({ state, compact = false, onRetry }: ConnectionStatusProps) {
   const opacity = useSharedValue(0);
   const pulseScale = useSharedValue(1);
 
@@ -64,6 +65,7 @@ export function ConnectionStatus({ state, compact = false }: ConnectionStatusPro
   }));
 
   const config = getStatusConfig(state);
+  const isRetryable = (state.status === 'error' || state.status === 'disconnected') && onRetry;
 
   // For connected state, show nothing or just a green dot in compact mode
   if (state.status === 'connected') {
@@ -78,7 +80,7 @@ export function ConnectionStatus({ state, compact = false }: ConnectionStatusPro
   }
 
   if (compact) {
-    return (
+    const content = (
       <Animated.View style={[styles.compactContainer, containerStyle]}>
         <Animated.View style={iconStyle}>
           <MaterialCommunityIcons
@@ -89,9 +91,18 @@ export function ConnectionStatus({ state, compact = false }: ConnectionStatusPro
         </Animated.View>
       </Animated.View>
     );
+
+    if (isRetryable) {
+      return (
+        <Pressable onPress={onRetry} hitSlop={8}>
+          {content}
+        </Pressable>
+      );
+    }
+    return content;
   }
 
-  return (
+  const content = (
     <Animated.View
       style={[
         styles.container,
@@ -108,9 +119,19 @@ export function ConnectionStatus({ state, compact = false }: ConnectionStatusPro
       </Animated.View>
       <Text style={[styles.text, { color: config.color }]}>
         {config.text}
+        {isRetryable && state.status === 'error' ? ' (tap to retry)' : ''}
       </Text>
     </Animated.View>
   );
+
+  if (isRetryable) {
+    return (
+      <Pressable onPress={onRetry}>
+        {content}
+      </Pressable>
+    );
+  }
+  return content;
 }
 
 /**

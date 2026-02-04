@@ -3,7 +3,7 @@
  * Displays permission request details and action buttons.
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -11,14 +11,19 @@ import {
   Pressable,
   Modal,
   ScrollView,
+  Platform,
+  Alert,
+  TextInput,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
-  runOnJS,
+  SlideInDown,
+  SlideOutDown,
 } from 'react-native-reanimated';
 
 import { Colors, Spacing, BorderRadius, FontSize, FontFamily } from '@/constants/Theme';
@@ -26,7 +31,7 @@ import type { Permission, PermissionResponse } from '@/types';
 
 interface PermissionDialogProps {
   permission: Permission | null;
-  onRespond: (permissionId: string, response: PermissionResponse) => void;
+  onRespond: (permissionId: string, response: PermissionResponse, message?: string) => void;
   onDismiss?: () => void;
 }
 
@@ -180,18 +185,53 @@ export function PermissionDialog({
 
 /**
  * Inline permission request banner.
+ * Displays at the bottom of the chat with slide-in animation and haptic feedback.
  */
 export function PermissionBanner({
   permission,
   onRespond,
 }: {
   permission: Permission;
-  onRespond: (permissionId: string, response: PermissionResponse) => void;
+  onRespond: (permissionId: string, response: PermissionResponse, message?: string) => void;
 }) {
   const toolInfo = getToolInfo(permission.toolType);
+  const [showFeedbackInput, setShowFeedbackInput] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+
+  // Trigger haptic feedback when banner appears
+  useEffect(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  }, []);
+
+  const handleRespond = useCallback((response: PermissionResponse, message?: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onRespond(permission.id, response, message);
+  }, [permission.id, onRespond]);
+
+  const handleDenyPress = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowFeedbackInput(true);
+  }, []);
+
+  const handleDenySubmit = useCallback(() => {
+    const message = feedbackText.trim() || undefined;
+    handleRespond('deny', message);
+    setShowFeedbackInput(false);
+    setFeedbackText('');
+  }, [feedbackText, handleRespond]);
+
+  const handleDenyCancel = useCallback(() => {
+    setShowFeedbackInput(false);
+    setFeedbackText('');
+  }, []);
 
   return (
-    <View style={styles.banner}>
+    <Animated.View
+      entering={SlideInDown.springify().damping(18).stiffness(140)}
+      exiting={SlideOutDown.springify().damping(18).stiffness(140)}
+      style={styles.banner}
+    >
+      {/* Header with icon and title */}
       <View style={styles.bannerHeader}>
         <View
           style={[
@@ -201,39 +241,116 @@ export function PermissionBanner({
         >
           <MaterialCommunityIcons
             name={toolInfo.icon}
-            size={16}
+            size={18}
             color={toolInfo.color}
           />
         </View>
         <View style={styles.bannerContent}>
-          <Text style={styles.bannerTitle}>{permission.toolType}</Text>
-          <Text style={styles.bannerDescription} numberOfLines={2}>
-            {permission.title}
-          </Text>
+          <View style={styles.bannerTitleRow}>
+            <Text style={styles.bannerLabel}>Permission Required</Text>
+            <MaterialCommunityIcons
+              name="shield-alert-outline"
+              size={14}
+              color={Colors.warning}
+            />
+          </View>
+          <Text style={styles.bannerToolType}>{permission.toolType}</Text>
         </View>
       </View>
 
-      <View style={styles.bannerActions}>
-        <Pressable
-          style={styles.bannerButton}
-          onPress={() => onRespond(permission.id, 'deny')}
-        >
-          <Text style={styles.bannerDenyText}>Deny</Text>
-        </Pressable>
-        <Pressable
-          style={styles.bannerButton}
-          onPress={() => onRespond(permission.id, 'accept_always')}
-        >
-          <Text style={styles.bannerAlwaysText}>Always</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.bannerButton, styles.bannerAcceptButton]}
-          onPress={() => onRespond(permission.id, 'accept')}
-        >
-          <Text style={styles.bannerAcceptText}>Allow</Text>
-        </Pressable>
-      </View>
-    </View>
+      {/* Permission description */}
+      <Text style={styles.bannerDescription} numberOfLines={3}>
+        {permission.title}
+      </Text>
+
+      {/* Feedback input (shown when denying) */}
+      {showFeedbackInput ? (
+        <View style={styles.feedbackContainer}>
+          <Text style={styles.feedbackLabel}>Feedback (optional)</Text>
+          <TextInput
+            style={styles.feedbackInput}
+            placeholder="Tell the AI why you're denying..."
+            placeholderTextColor={Colors.textMuted}
+            value={feedbackText}
+            onChangeText={setFeedbackText}
+            multiline
+            numberOfLines={2}
+            autoFocus
+          />
+          <View style={styles.feedbackActions}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.feedbackButton,
+                styles.feedbackCancelButton,
+                pressed && styles.bannerButtonPressed,
+              ]}
+              onPress={handleDenyCancel}
+            >
+              <Text style={styles.feedbackCancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.feedbackButton,
+                styles.feedbackSubmitButton,
+                pressed && styles.bannerButtonPressed,
+              ]}
+              onPress={handleDenySubmit}
+            >
+              <Text style={styles.feedbackSubmitText}>Deny</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        /* Action buttons */
+        <View style={styles.bannerActions}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.bannerButton,
+              styles.bannerDenyButton,
+              pressed && styles.bannerButtonPressed,
+            ]}
+            onPress={handleDenyPress}
+          >
+            <MaterialCommunityIcons
+              name="close"
+              size={16}
+              color={Colors.error}
+            />
+            <Text style={styles.bannerDenyText}>Deny</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.bannerButton,
+              styles.bannerAlwaysButton,
+              pressed && styles.bannerButtonPressed,
+            ]}
+            onPress={() => handleRespond('accept_always')}
+          >
+            <MaterialCommunityIcons
+              name="check-all"
+              size={16}
+              color={Colors.purple}
+            />
+            <Text style={styles.bannerAlwaysText}>Always</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.bannerButton,
+              styles.bannerAcceptButton,
+              pressed && styles.bannerButtonPressed,
+            ]}
+            onPress={() => handleRespond('accept')}
+          >
+            <MaterialCommunityIcons
+              name="check"
+              size={16}
+              color={Colors.text}
+            />
+            <Text style={styles.bannerAcceptText}>Allow</Text>
+          </Pressable>
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
@@ -451,14 +568,25 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.md,
     paddingHorizontal: Spacing.lg,
   },
-  // Banner styles
+  // Banner styles - OpenCode themed inline permission banner
   banner: {
     backgroundColor: Colors.backgroundSecondary,
     borderRadius: BorderRadius.lg,
     padding: Spacing.md,
-    marginVertical: Spacing.sm,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: Colors.warning,
+    // Subtle glow effect with shadow
+    ...Platform.select({
+      ios: {
+        shadowColor: Colors.warning,
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
   },
   bannerHeader: {
     flexDirection: 'row',
@@ -466,24 +594,39 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
   },
   bannerIconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
   bannerContent: {
     flex: 1,
+    justifyContent: 'center',
   },
-  bannerTitle: {
+  bannerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+  },
+  bannerLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.warning,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  bannerToolType: {
     fontSize: FontSize.sm,
     fontWeight: '600',
     color: Colors.text,
+    marginTop: 2,
   },
   bannerDescription: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
-    marginTop: 2,
+    lineHeight: 20,
+    marginBottom: Spacing.md,
   },
   bannerActions: {
     flexDirection: 'row',
@@ -491,27 +634,88 @@ const styles = StyleSheet.create({
   },
   bannerButton: {
     flex: 1,
-    paddingVertical: Spacing.sm,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingVertical: Spacing.sm,
     borderRadius: BorderRadius.md,
-    backgroundColor: Colors.backgroundTertiary,
+  },
+  bannerButtonPressed: {
+    opacity: 0.7,
+  },
+  bannerDenyButton: {
+    backgroundColor: `${Colors.error}20`,
+  },
+  bannerAlwaysButton: {
+    backgroundColor: `${Colors.purple}20`,
   },
   bannerAcceptButton: {
     backgroundColor: Colors.primary,
   },
   bannerDenyText: {
     fontSize: FontSize.sm,
-    fontWeight: '500',
+    fontWeight: '600',
     color: Colors.error,
   },
   bannerAlwaysText: {
     fontSize: FontSize.sm,
-    fontWeight: '500',
+    fontWeight: '600',
     color: Colors.purple,
   },
   bannerAcceptText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
+    color: Colors.textInverse,
+  },
+  // Feedback input styles (for denial)
+  feedbackContainer: {
+    marginTop: Spacing.xs,
+  },
+  feedbackLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '500',
+    color: Colors.textSecondary,
+    marginBottom: Spacing.xs,
+  },
+  feedbackInput: {
+    backgroundColor: Colors.backgroundTertiary,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.sm,
+    paddingTop: Spacing.sm,
+    fontSize: FontSize.sm,
     color: Colors.text,
+    minHeight: 60,
+    maxHeight: 100,
+    textAlignVertical: 'top',
+  },
+  feedbackActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+  },
+  feedbackButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.md,
+  },
+  feedbackCancelButton: {
+    backgroundColor: Colors.backgroundTertiary,
+  },
+  feedbackSubmitButton: {
+    backgroundColor: `${Colors.error}20`,
+  },
+  feedbackCancelText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  feedbackSubmitText: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    color: Colors.error,
   },
 });

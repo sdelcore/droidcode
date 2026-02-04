@@ -8,7 +8,7 @@
 import { MessageDeduplicator } from './MessageDeduplicator';
 import { StreamingMessageState } from './StreamingMessageState';
 import type { SseEventEnvelope } from '../sse/EventQueue';
-import type { MessageDto, TodoDto, FileDiffDto, Permission } from '@/types';
+import type { MessageDto, TodoDto, FileDiffDto, Permission, QuestionRequest } from '@/types';
 
 /**
  * Session events (non-message events).
@@ -18,6 +18,9 @@ export type SessionEvent =
   | { type: 'session.diff'; files: FileDiffDto[] }
   | { type: 'session.status'; status: 'busy' | 'idle' }
   | { type: 'permission.requested'; permission: Permission }
+  | { type: 'question.asked'; question: QuestionRequest }
+  | { type: 'question.replied'; requestId: string }
+  | { type: 'question.rejected'; requestId: string }
   | { type: 'session.updated'; title?: string }
   | { type: 'error'; message: string };
 
@@ -134,6 +137,15 @@ export class MessageProcessor {
       case 'permission.requested':
       case 'permission.updated':
         this.handlePermissionRequest(envelope.payload as any);
+        break;
+      case 'question.asked':
+        this.handleQuestionAsked(envelope.payload as any);
+        break;
+      case 'question.replied':
+        this.handleQuestionReplied(envelope.payload as any);
+        break;
+      case 'question.rejected':
+        this.handleQuestionRejected(envelope.payload as any);
         break;
       case 'session.updated':
         this.handleSessionUpdated(envelope.payload as { title?: string });
@@ -288,6 +300,32 @@ export class MessageProcessor {
         metadata: payload.metadata,
         createdAt: Date.now(),
       },
+    });
+  }
+
+  private handleQuestionAsked(payload: any): void {
+    this.config.onSessionEvent({
+      type: 'question.asked',
+      question: {
+        id: payload.requestId,
+        sessionId: this.config.sessionId,
+        questions: payload.questions,
+        tool: payload.tool,
+      },
+    });
+  }
+
+  private handleQuestionReplied(payload: any): void {
+    this.config.onSessionEvent({
+      type: 'question.replied',
+      requestId: payload.requestId,
+    });
+  }
+
+  private handleQuestionRejected(payload: any): void {
+    this.config.onSessionEvent({
+      type: 'question.rejected',
+      requestId: payload.requestId,
     });
   }
 

@@ -3,7 +3,7 @@
  * Ported from: data/remote/sse/SseEvent.kt
  */
 
-import { FileDiffDto, TodoDto, ToolStatus, SessionDto } from './api';
+import { FileDiffDto, TodoDto, ToolStatus, SessionDto, QuestionInfoDto, QuestionOptionDto } from './api';
 
 // ============================================================================
 // SSE Event Types (Sealed class equivalent)
@@ -46,7 +46,11 @@ export type SseEvent =
   | ToolExecuteBeforeEvent
   | ToolExecuteAfterEvent
   // Command events
-  | CommandExecutedEvent;
+  | CommandExecutedEvent
+  // Question events (AI asking user questions)
+  | QuestionAskedEvent
+  | QuestionRepliedEvent
+  | QuestionRejectedEvent;
 
 export interface MessageStartEvent {
   type: 'message.start';
@@ -229,6 +233,31 @@ export interface CommandExecutedEvent {
   command?: string;
 }
 
+// Question events (AI asking user questions)
+export interface QuestionAskedEvent {
+  type: 'question.asked';
+  sessionId: string;
+  requestId: string;
+  questions: QuestionInfoDto[];
+  tool?: {
+    messageId: string;
+    callId: string;
+  };
+}
+
+export interface QuestionRepliedEvent {
+  type: 'question.replied';
+  sessionId: string;
+  requestId: string;
+  answers: string[][];
+}
+
+export interface QuestionRejectedEvent {
+  type: 'question.rejected';
+  sessionId: string;
+  requestId: string;
+}
+
 // ============================================================================
 // Connection State
 // ============================================================================
@@ -373,5 +402,41 @@ export interface PermissionRepliedEventData {
     sessionID: string;
     permissionID: string;
     response: string;
+  };
+}
+
+// Question event raw data (from server)
+export interface QuestionAskedEventData {
+  properties: {
+    id: string;
+    sessionID: string;
+    questions: Array<{
+      question: string;
+      header: string;
+      options: Array<{
+        label: string;
+        description: string;
+      }>;
+      multiple?: boolean;
+    }>;
+    tool?: {
+      messageID: string;
+      callID: string;
+    };
+  };
+}
+
+export interface QuestionRepliedEventData {
+  properties: {
+    sessionID: string;
+    requestID: string;
+    answers: string[][];
+  };
+}
+
+export interface QuestionRejectedEventData {
+  properties: {
+    sessionID: string;
+    requestID: string;
   };
 }

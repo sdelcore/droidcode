@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import type { SessionDto, SseEvent, AgentType } from '@/types';
+import type { SessionFilters, SortPreset, AgentFilter, StatusFilter } from '@/types/domain';
+import { getWorkflowPriority } from '@/types/domain';
 import { apiClient } from '@/services/api/apiClient';
 import { sessionMetadataRepository } from '@/services/db/sessionMetadataRepository';
+import { filterPreferencesService } from '@/services/preferences/filterPreferences';
 
 /**
  * Fetch the last agent used in a session by looking at the most recent assistant message.
@@ -46,7 +49,7 @@ interface SessionMetadata {
  * If a session has been marked as busy for longer than this without activity,
  * it's assumed to be idle (prevents stuck spinners from missed SSE events).
  */
-const STALE_BUSY_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const STALE_BUSY_THRESHOLD_MS = 60 * 1000; // 60 seconds
 
 /**
  * Clean up stale busy states in session metadata.
@@ -91,6 +94,10 @@ interface SessionState {
   error: string | null;
   currentHostId: number | null;
   currentPort: number | null;
+  
+  // Filter state
+  filters: SessionFilters;
+  filtersLoaded: boolean;
 
   // Actions
   fetchSessions: (hostId: number, port?: number) => Promise<void>;
@@ -112,11 +119,20 @@ interface SessionState {
   updateSessionStatus: (sessionId: string, isBusy: boolean) => void;
   getSessionMetadata: (sessionId: string) => SessionMetadata | undefined;
   
+  // Filter actions
+  loadFilters: () => Promise<void>;
+  toggleAgentFilter: (agent: AgentFilter) => void;
+  toggleStatusFilter: (status: StatusFilter) => void;
+  setSortPreset: (preset: SortPreset) => void;
+  clearFilters: () => void;
+  getFilteredSessions: () => SessionDto[];
+  
   // SSE event handling
   handleGlobalSessionEvent: (event: SseEvent) => void;
   
   // Internal helpers (prefixed with _)
   _upsertSession: (sessionDto: SessionDto) => void;
+  _saveFilters: () => void;
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
@@ -128,6 +144,14 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   error: null,
   currentHostId: null,
   currentPort: null,
+  
+  // Filter state - default values
+  filters: {
+    agents: new Set<AgentFilter>(),
+    statuses: new Set<StatusFilter>(),
+    sortPreset: 'recent' as SortPreset,
+  },
+  filtersLoaded: false,
 
   fetchSessions: async (hostId: number, port?: number) => {
     // Stale-while-revalidate pattern: Show cached sessions while refreshing
@@ -490,8 +514,18 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   updateSessionStatus: (sessionId: string, isBusy: boolean) => {
+    const currentMetadata = get().sessionMetadata[sessionId];
+    const wasAlreadyBusy = currentMetadata?.isBusy ?? false;
+    
+    // Log status transitions
+    if (wasAlreadyBusy !== isBusy) {
+      console.log(
+        `[SessionStore] Session ${sessionId} status transition: ${wasAlreadyBusy ? 'busy' : 'idle'} -> ${isBusy ? 'busy' : 'idle'}`
+      );
+    }
+    
     const metadata: SessionMetadata = {
-      ...get().sessionMetadata[sessionId],
+      ...currentMetadata,
       isBusy,
       lastActivity: Date.now(),
     };
@@ -571,6 +605,158 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     }
   },
   
+  // Filter actions
+  loadFilters: async () => {
+    try {
+      const filters = await filterPreferencesService.load();
+      set({ filters, filtersLoaded: true });
+      console.log('[SessionStore] Loaded filter preferences:', {
+        agents: Array.from(filters.agents),
+        statuses: Array.from(filters.statuses),
+        sortPreset: filters.sortPreset,
+      });
+    } catch (error) {
+      console.error('[SessionStore] Failed to load filter preferences:', error);
+      set({ filtersLoaded: true });
+    }
+  },
+
+  toggleAgentFilter: (agent: AgentFilter) => {
+    const { filters } = get();
+    const newAgents = new Set(filters.agents);
+    
+    if (newAgents.has(agent)) {
+      newAgents.delete(agent);
+    } else {
+      newAgents.add(agent);
+    }
+    
+    const newFilters = { ...filters, agents: newAgents };
+    set({ filters: newFilters });
+    get()._saveFilters();
+  },
+
+  toggleStatusFilter: (status: StatusFilter) => {
+    const { filters } = get();
+    const newStatuses = new Set(filters.statuses);
+    
+    if (newStatuses.has(status)) {
+      newStatuses.delete(status);
+    } else {
+      newStatuses.add(status);
+    }
+    
+    const newFilters = { ...filters, statuses: newStatuses };
+    set({ filters: newFilters });
+    get()._saveFilters();
+  },
+
+  setSortPreset: (preset: SortPreset) => {
+    const { filters } = get();
+    const newFilters = { ...filters, sortPreset: preset };
+    set({ filters: newFilters });
+    get()._saveFilters();
+  },
+
+  clearFilters: () => {
+    const newFilters: SessionFilters = {
+      agents: new Set(),
+      statuses: new Set(),
+      sortPreset: get().filters.sortPreset, // Keep sort preference
+    };
+    set({ filters: newFilters });
+    get()._saveFilters();
+  },
+
+  getFilteredSessions: () => {
+    const { sessions, sessionMetadata, filters } = get();
+    let filtered = [...sessions];
+    
+    // Apply agent filter (OR within group)
+    if (filters.agents.size > 0) {
+      filtered = filtered.filter((session) => {
+        const agent = sessionMetadata[session.id]?.lastAgent;
+        // If no agent data, only include if no agent filters
+        if (!agent) return false;
+        return filters.agents.has(agent as AgentFilter);
+      });
+    }
+    
+    // Apply status filter (OR within group)
+    if (filters.statuses.size > 0) {
+      filtered = filtered.filter((session) => {
+        const isBusy = sessionMetadata[session.id]?.isBusy ?? false;
+        const status: StatusFilter = isBusy ? 'running' : 'completed';
+        return filters.statuses.has(status);
+      });
+    }
+    
+    // Apply sort
+    switch (filters.sortPreset) {
+      case 'workflow':
+        // Workflow priority: plan-completed, plan-running, build-running, build-completed, others
+        filtered.sort((a, b) => {
+          const aAgent = sessionMetadata[a.id]?.lastAgent;
+          const bAgent = sessionMetadata[b.id]?.lastAgent;
+          const aRunning = sessionMetadata[a.id]?.isBusy ?? false;
+          const bRunning = sessionMetadata[b.id]?.isBusy ?? false;
+          
+          const aPriority = getWorkflowPriority(aAgent, aRunning);
+          const bPriority = getWorkflowPriority(bAgent, bRunning);
+          
+          if (aPriority !== bPriority) {
+            return aPriority - bPriority;
+          }
+          // Within same priority, sort by recency
+          return b.time.updated - a.time.updated;
+        });
+        break;
+        
+      case 'created':
+        filtered.sort((a, b) => b.time.created - a.time.created);
+        break;
+        
+      case 'duration':
+        filtered.sort((a, b) => {
+          const aDuration = a.time.updated - a.time.created;
+          const bDuration = b.time.updated - b.time.created;
+          return bDuration - aDuration;
+        });
+        break;
+        
+      case 'files':
+        filtered.sort((a, b) => {
+          const aFiles = a.summary?.files ?? 0;
+          const bFiles = b.summary?.files ?? 0;
+          return bFiles - aFiles;
+        });
+        break;
+        
+      case 'alpha':
+        filtered.sort((a, b) => {
+          const aTitle = a.title || 'Untitled';
+          const bTitle = b.title || 'Untitled';
+          return aTitle.localeCompare(bTitle);
+        });
+        break;
+        
+      case 'recent':
+      default:
+        filtered.sort((a, b) => b.time.updated - a.time.updated);
+        break;
+    }
+    
+    return filtered;
+  },
+
+  // Internal helper: Save filters to persistence (async, non-blocking)
+  _saveFilters: () => {
+    const { filters } = get();
+    filterPreferencesService.save(filters).catch((error) => {
+      console.error('[SessionStore] Failed to save filter preferences:', error);
+    });
+  },
+
   // Internal helper: Upsert session (add if new, update if exists)
   _upsertSession: (sessionDto: SessionDto) => {
     const { sessions } = get();

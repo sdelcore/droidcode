@@ -10,6 +10,7 @@ import { useVisibilityStore } from '@/stores/visibilityStore';
 import { sseClient } from '@/services/sse/sseClient';
 import { sseConnectionManager } from '@/services/sse/sseConnectionManager';
 import { sseBackgroundServiceManager } from '@/services/sse/native';
+import { networkMonitor } from '@/services/network';
 import { useProjectStore } from '@/stores/projectStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import {
@@ -79,6 +80,27 @@ export function AppLifecycleProvider({ children }: AppLifecycleProviderProps) {
       subscription.remove();
     };
   }, [setAppForeground]);
+
+  // Network monitoring - reconnect SSE when network is restored
+  useEffect(() => {
+    // Start network monitoring
+    networkMonitor.start();
+
+    // Subscribe to network changes
+    const unsubscribe = networkMonitor.onNetworkChange((isConnected) => {
+      if (isConnected) {
+        console.log('[Lifecycle] Network restored - triggering SSE reconnection');
+        // Retry all SSE connections
+        sseClient.retryConnection();
+        sseConnectionManager.retryAllConnections();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      networkMonitor.stop();
+    };
+  }, []);
 
   // Global SSE event listener for notifications from all connected projects
   const sessionStatusRef = useRef<Map<string, 'busy' | 'idle'>>(new Map());

@@ -210,6 +210,30 @@ class SseConnectionManager {
   }
 
   /**
+   * Retry a specific connection after failure.
+   * @param connectionId - The connection ID to retry
+   */
+  retryConnection(connectionId: string): void {
+    const info = this.connections.get(connectionId);
+    if (info) {
+      console.log(`[SSE Manager] Retrying connection: ${connectionId}`);
+      info.client.retryConnection();
+    } else {
+      console.log(`[SSE Manager] Cannot retry: connection ${connectionId} not found`);
+    }
+  }
+
+  /**
+   * Retry all connections that are in error state.
+   */
+  retryAllConnections(): void {
+    console.log(`[SSE Manager] Retrying all connections`);
+    this.connections.forEach((info) => {
+      info.client.retryConnection();
+    });
+  }
+
+  /**
    * Subscribe to events from all connections.
    * @returns Unsubscribe function
    */

@@ -14,6 +14,7 @@ import {
   NOTIFICATION_ACTIONS,
 } from '@/services/notifications';
 import { apiClient } from '@/services/api/apiClient';
+import type { PermissionResponse } from '@/types';
 
 interface NotificationProviderProps {
   children: ReactNode;
@@ -110,7 +111,7 @@ async function handleNotificationResponse(
  */
 async function handlePermissionAction(
   data: NotificationData,
-  action: 'accept' | 'deny'
+  action: PermissionResponse
 ): Promise<void> {
   if (!data.permissionId) {
     console.error('[Notifications] No permissionId in data');
@@ -121,9 +122,10 @@ async function handlePermissionAction(
     console.log(`[Notifications] Responding to permission: ${action}`);
     await apiClient.respondToPermission(
       data.hostId,
-      data.sessionId,
       data.permissionId,
-      action
+      action,
+      undefined, // No message for notification actions
+      undefined  // No port override
     );
     console.log('[Notifications] Permission response sent');
 

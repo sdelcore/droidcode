@@ -18,7 +18,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated'
 import * as Haptics from 'expo-haptics'
@@ -91,10 +90,7 @@ export function SessionMenu({
 
   useEffect(() => {
     if (visible) {
-      translateX.value = withSpring(0, {
-        damping: 20,
-        stiffness: 250,
-      })
+      translateX.value = withTiming(0, { duration: 200 })
       opacity.value = withTiming(0.7, { duration: 250 })
     } else {
       translateX.value = withTiming(screenWidth, { duration: 200 })
