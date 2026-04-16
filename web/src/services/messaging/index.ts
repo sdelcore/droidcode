@@ -1,0 +1,1 @@
+export { MessageAccumulator } from './accumulator'

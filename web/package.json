@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "smoke": "tsx scripts/phase2-smoke.ts",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -45,6 +46,7 @@
     "globals": "^17.4.0",
     "prettier": "^3.8.3",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.21.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.0",
     "vite": "^7.3.2",
