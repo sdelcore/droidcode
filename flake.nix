@@ -1,5 +1,5 @@
 {
-  description = "DroidCode Expo - React Native client for OpenCode";
+  description = "DroidCode - web-first client for Rivet sandbox-agent (Vite + Tauri 2)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -29,9 +29,9 @@
           includeEmulator = true;
           includeSystemImages = true;
           includeNDK = true;
-          # NDK 27.1.12297006 required by React Native 0.81+
+          # NDK 27.1.12297006 required by React Native 0.81+ (legacy Expo app)
+          # and used by Tauri 2 Android target in Phase 9.
           ndkVersions = [ "27.1.12297006" "26.1.10909125" ];
-          # CMake required for native builds
           cmakeVersions = [ "3.22.1" ];
           includeSources = false;
           extraLicenses = [
@@ -47,23 +47,50 @@
 
         androidSdk = androidComposition.androidsdk;
 
+        # Tauri 2 Linux system deps (webkit2gtk 4.1 is Tauri 2's target).
+        tauriBuildInputs = with pkgs; [
+          at-spi2-atk
+          atkmm
+          cairo
+          gdk-pixbuf
+          glib
+          gobject-introspection
+          gtk3
+          harfbuzz
+          librsvg
+          libsoup_3
+          openssl
+          pango
+          webkitgtk_4_1
+          glib-networking  # runtime TLS for webkit fetch()
+        ];
+
       in {
         devShells.default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            wrapGAppsHook3
+          ];
+
           buildInputs = with pkgs; [
-            # Node.js for React Native (v22 required for mobile-mcp)
+            # Web toolchain
             nodejs_22
             nodePackages.npm
 
-            # Android SDK
+            # Tauri toolchain
+            rustc
+            cargo
+            cargo-tauri
+            rust-analyzer
+            rustfmt
+            clippy
+
+            # Android (legacy Expo app + Phase 9 Tauri Android)
             androidSdk
-
-            # Java for Android builds
             jdk17
-
-            # Additional tools
             watchman
             gradle
-          ];
+          ] ++ tauriBuildInputs;
 
           shellHook = ''
             export ANDROID_HOME="${androidSdk}/libexec/android-sdk"
@@ -74,21 +101,20 @@
             # Override aapt2 for Gradle compatibility
             export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=$ANDROID_HOME/build-tools/${buildToolsVersion}/aapt2"
 
-            # Add platform-tools to PATH
-            export PATH="$ANDROID_HOME/platform-tools:$PWD/node_modules/.bin:$PATH"
+            # Tauri runtime: webkit needs GIO modules (TLS) + GSettings schemas
+            export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules"
+            export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"
 
-            echo "DroidCode Expo development environment"
+            # Add platform-tools + node_modules/.bin to PATH
+            export PATH="$ANDROID_HOME/platform-tools:$PWD/web/node_modules/.bin:$PWD/node_modules/.bin:$PATH"
+
+            echo "DroidCode dev environment (Vite + Tauri 2)"
             echo ""
-            echo "ANDROID_HOME: $ANDROID_HOME"
-            echo "ANDROID_NDK:  $ANDROID_NDK_HOME"
-            echo "JAVA_HOME:    $JAVA_HOME"
+            echo "  Web:      cd web && npm run dev"
+            echo "  Tauri:    cd web && cargo tauri dev"
+            echo "  Build:    cd web && npm run build && cargo tauri build"
             echo ""
-            echo "Commands:"
-            echo "  npm start              - Start Expo dev server"
-            echo "  npm run android        - Start on Android"
-            echo "  npm test               - Run tests"
-            echo "  npm run typecheck      - TypeScript check"
-            echo "  ./scripts/push-update.sh  - Build and deploy APK"
+            echo "  Legacy Expo app still buildable via npm start (repo root)."
             echo ""
           '';
         };
