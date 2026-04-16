@@ -31,6 +31,13 @@ function RootLayout() {
               >
                 Hosts
               </Link>
+              <Link
+                to="/settings"
+                activeProps={{ className: 'text-foreground' }}
+                className="hover:text-foreground"
+              >
+                Settings
+              </Link>
             </nav>
           </div>
         </header>
