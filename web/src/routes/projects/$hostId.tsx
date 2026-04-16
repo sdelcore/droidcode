@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, createFileRoute, useParams } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,7 @@ export const Route = createFileRoute('/projects/$hostId')({
 function ProjectsForHost() {
   const { hostId } = useParams({ from: '/projects/$hostId' })
   const numericHostId = Number(hostId)
+  const navigate = useNavigate()
 
   const host = useHostStore((s) => s.hosts.find((h) => h.id === numericHostId))
   const projects = useProjectStore((s) => s.byHost[numericHostId] ?? [])
@@ -69,8 +70,10 @@ function ProjectsForHost() {
   }
 
   function openProject(p: ProjectFolder) {
-    // Sessions list lands in Phase 4; for now toast the choice.
-    toast.info(`Session list for ${p.directory} is Phase 4.`)
+    navigate({
+      to: '/sessions/$hostId/$projectId',
+      params: { hostId: String(numericHostId), projectId: String(p.id) },
+    })
   }
 
   return (

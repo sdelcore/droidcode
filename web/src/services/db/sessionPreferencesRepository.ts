@@ -6,6 +6,10 @@ export const sessionPreferencesRepository = {
     return db.sessionPreferences.get(sessionId)
   },
 
+  getByHost(hostId: number): Promise<SessionPreferences[]> {
+    return db.sessionPreferences.where('hostId').equals(hostId).toArray()
+  },
+
   async save(prefs: SessionPreferences): Promise<void> {
     await db.sessionPreferences.put(prefs)
   },
