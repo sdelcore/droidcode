@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, createFileRoute, useParams } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { toast } from 'sonner'
-import { CheckSquare2, Square, Trash2 } from 'lucide-react'
+import { CheckSquare2, MoreHorizontal, Square, Trash2 } from 'lucide-react'
 import type { SessionRecord } from 'sandbox-agent'
+import { NewSessionDialog } from '@/components/NewSessionDialog'
 import {
   applyFilters,
   applySort,
@@ -30,6 +31,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -57,20 +59,19 @@ function SessionList() {
   const { hostId, projectId } = useParams({ from: '/sessions/$hostId/$projectId/' })
   const numericHostId = Number(hostId)
   const numericProjectId = Number(projectId)
+  const navigate = useNavigate()
 
   const host = useHostStore((s) => s.hosts.find((h) => h.id === numericHostId))
   const sessions = useSessionStore((s) => s.byHost[numericHostId] ?? [])
   const filters = useSessionStore((s) => s.filters)
   const loadSessions = useSessionStore((s) => s.loadForHost)
   const destroySession = useSessionStore((s) => s.destroySession)
-  const createSession = useSessionStore((s) => s.createSession)
   const setFilters = useSessionStore((s) => s.setFilters)
   const setSortPreset = useSessionStore((s) => s.setSortPreset)
   const clearFilters = useSessionStore((s) => s.clearFilters)
   const isSessionsLoading = useSessionStore((s) => s.isLoading)
   const sessionsError = useSessionStore((s) => s.error)
 
-  const agents = useConfigStore((s) => s.agentsByHost[numericHostId] ?? [])
   const loadAgents = useConfigStore((s) => s.loadAgents)
 
   const [project, setProject] = useState<ProjectFolder | null>(null)
@@ -78,6 +79,7 @@ function SessionList() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [renameTarget, setRenameTarget] = useState<SessionRecord | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -160,22 +162,18 @@ function SessionList() {
     toast.success(alias ? `Renamed to "${alias}"` : 'Alias cleared')
   }
 
-  async function handleNewSession() {
-    if (!project) return
-    const installed = agents.find((a) => a.installed && a.credentialsAvailable)
-    if (!installed) {
-      toast.error('No installed agent with credentials on this host')
-      return
-    }
-    try {
-      const record = await createSession(numericHostId, {
-        agent: installed.id,
-        cwd: project.directory,
-      })
-      toast.success(`Created session ${record.id.slice(0, 8)} (chat UI lands in Phase 5)`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Create failed')
-    }
+  function handleSessionCreated(sessionId: string) {
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: { hostId: String(numericHostId), sessionId },
+    })
+  }
+
+  function openSessionChat(sessionId: string) {
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: { hostId: String(numericHostId), sessionId },
+    })
   }
 
   if (!host) {
@@ -214,7 +212,7 @@ function SessionList() {
               {project?.directory ?? 'Loading project…'}
             </p>
           </div>
-          <Button size="sm" onClick={handleNewSession} disabled={!project}>
+          <Button size="sm" onClick={() => setNewSessionOpen(true)} disabled={!project}>
             New session
           </Button>
         </div>
@@ -289,6 +287,7 @@ function SessionList() {
               alias={prefs[s.id]?.alias}
               selected={selected.has(s.id)}
               onToggle={() => toggleOne(s.id)}
+              onOpen={() => openSessionChat(s.id)}
               onRename={() => {
                 setRenameTarget(s)
                 setRenameValue(prefs[s.id]?.alias ?? '')
@@ -296,6 +295,16 @@ function SessionList() {
             />
           ))}
         </ul>
+      )}
+
+      {project && (
+        <NewSessionDialog
+          hostId={numericHostId}
+          cwd={project.directory}
+          open={newSessionOpen}
+          onOpenChange={setNewSessionOpen}
+          onCreated={handleSessionCreated}
+        />
       )}
 
       <Dialog
@@ -430,12 +439,14 @@ function SessionRow({
   alias,
   selected,
   onToggle,
+  onOpen,
   onRename,
 }: {
   record: SessionRecord
   alias?: string
   selected: boolean
   onToggle: () => void
+  onOpen: () => void
   onRename: () => void
 }) {
   const running = isSessionRunning(record)
@@ -451,7 +462,7 @@ function SessionRow({
           <button
             type="button"
             className="flex min-w-0 flex-1 flex-col items-start text-left"
-            onClick={onRename}
+            onClick={onOpen}
           >
             <span className="truncate text-sm font-medium">{name}</span>
             <span className="truncate text-xs text-muted-foreground">
@@ -467,6 +478,21 @@ function SessionRow({
             <span className="text-xs text-muted-foreground">
               {new Date(record.createdAt).toLocaleDateString()}
             </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" aria-label="More">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={onOpen}>Open chat</DropdownMenuItem>
+                <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onToggle}>
+                  {selected ? 'Deselect' : 'Select'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </CardContent>
       </Card>
