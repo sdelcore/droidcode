@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { projectRepository } from '@/services/db'
+import { useMetadataStore } from './metadataStore'
 import type { ProjectFolder } from '@/types'
 
 interface ProjectStoreState {
@@ -50,6 +51,12 @@ export const useProjectStore = create<ProjectStoreState>()((set, get) => ({
         [input.hostId]: [project, ...filtered],
       },
     })
+    // Mirror to the daemon-side metadata file so this folder shows up on
+    // any browser pointed at the same daemon.
+    useMetadataStore.getState().upsertProject(input.hostId, {
+      directory: project.directory,
+      name: project.name,
+    })
     return project
   },
 
@@ -66,6 +73,7 @@ export const useProjectStore = create<ProjectStoreState>()((set, get) => ({
       selectedProjectId:
         get().selectedProjectId === id ? null : get().selectedProjectId,
     })
+    useMetadataStore.getState().removeProject(project.hostId, project.directory)
   },
 
   selectProject(id) {

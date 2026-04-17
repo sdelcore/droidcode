@@ -24,6 +24,7 @@ import {
 } from '@/services/sessions/sortAndFilter'
 import { sessionPreferencesRepository, projectRepository } from '@/services/db'
 import { useConfigStore, useHostStore, useSessionStore } from '@/stores'
+import { useMetadataStore } from '@/stores/metadataStore'
 import type { ProjectFolder, SessionPreferences, SortPreset } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -168,6 +169,12 @@ function SessionDashboard() {
     }
     await sessionPreferencesRepository.save(next)
     setPrefs((p) => ({ ...p, [sessionId]: next }))
+    // Mirror to the shared metadata file so the rename follows you across
+    // browsers pointed at the same daemon.
+    useMetadataStore.getState().upsertSession(numericHostId, {
+      id: sessionId,
+      alias: trimmed || undefined,
+    })
   }
 
   function handleSessionCreated(sessionId: string) {

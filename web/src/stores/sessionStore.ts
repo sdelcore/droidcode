@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import type { SessionCreateRequest, SessionRecord } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
 import { requireHost } from './hostStore'
+import { useMetadataStore } from './metadataStore'
 import { idbStorage } from './idbStorage'
 import {
   DEFAULT_SESSION_FILTERS,
@@ -67,6 +68,17 @@ export const useSessionStore = create<SessionStoreState>()(
         set({
           byHost: { ...get().byHost, [hostId]: [record, ...list] },
         })
+        // Snapshot this session into the daemon-side metadata file so other
+        // browsers/devices pointed at the same daemon can resume it without
+        // having watched its creation.
+        useMetadataStore.getState().upsertSession(hostId, {
+          id: record.id,
+          agent: record.agent,
+          agentSessionId: record.agentSessionId,
+          lastConnectionId: record.lastConnectionId,
+          sessionInit: record.sessionInit,
+          createdAt: record.createdAt,
+        })
         return record
       },
 
@@ -81,6 +93,7 @@ export const useSessionStore = create<SessionStoreState>()(
             [hostId]: list.filter((s) => s.id !== sessionId),
           },
         })
+        useMetadataStore.getState().removeSession(hostId, sessionId)
       },
 
       setFilters(next) {

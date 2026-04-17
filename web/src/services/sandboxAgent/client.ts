@@ -1,10 +1,22 @@
+import type { SessionRecord } from 'sandbox-agent'
 import { SandboxAgent } from 'sandbox-agent'
 import { IndexedDbSessionPersistDriver } from './persist-indexeddb'
 import type { Host } from '@/types'
 
-const persist = new IndexedDbSessionPersistDriver()
+export const persist = new IndexedDbSessionPersistDriver()
 const byHostId = new Map<number, Promise<SandboxAgent>>()
 const byUrl = new Map<string, Promise<SandboxAgent>>()
+
+// Insert a SessionRecord into the local persist driver if it isn't already
+// there. Used to hydrate a fresh browser from the daemon-side metadata file
+// so listSessions / resumeSession work without needing each session to have
+// been created locally.
+export async function seedSessionIfMissing(record: SessionRecord): Promise<boolean> {
+  const existing = await persist.getSession(record.id)
+  if (existing) return false
+  await persist.updateSession(record)
+  return true
+}
 
 export function hostBaseUrl(host: Pick<Host, 'host' | 'port' | 'isSecure'>): string {
   return `${host.isSecure ? 'https' : 'http'}://${host.host}:${host.port}`
@@ -18,10 +30,22 @@ export function connectToHost(host: Host): Promise<SandboxAgent> {
     baseUrl: hostBaseUrl(host),
     token: host.token,
     persist,
-  }).catch((err) => {
-    byHostId.delete(host.id)
-    throw err
   })
+    .then(async (sdk) => {
+      // Dynamic import to break the cycle between client.ts and
+      // metadataStore (which calls hostBaseUrl from this module).
+      try {
+        const mod = await import('@/services/sync/bootstrapFromMetadata')
+        await mod.bootstrapFromMetadata(host)
+      } catch (err) {
+        console.error('metadata bootstrap failed', err)
+      }
+      return sdk
+    })
+    .catch((err) => {
+      byHostId.delete(host.id)
+      throw err
+    })
 
   byHostId.set(host.id, sdkPromise)
   return sdkPromise

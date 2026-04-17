@@ -4,6 +4,7 @@ import type { AgentInfo } from 'sandbox-agent'
 import { useConfigStore, useSessionStore } from '@/stores'
 import { sessionPreferencesRepository } from '@/services/db'
 import { formatError } from '@/services/errors/formatError'
+import { useMetadataStore } from '@/stores/metadataStore'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -66,6 +67,10 @@ export function NewSessionDialog({
           sessionId: record.id,
           hostId,
           agent: selectedAgent,
+          alias,
+        })
+        useMetadataStore.getState().upsertSession(hostId, {
+          id: record.id,
           alias,
         })
       }
