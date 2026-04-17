@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { toast } from 'sonner'
-import { CheckSquare2, MoreHorizontal, Square, Trash2 } from 'lucide-react'
+import { CheckSquare2, FilePen, Hammer, HelpCircle, MoreHorizontal, Square, Trash2 } from 'lucide-react'
 import type { SessionRecord } from 'sandbox-agent'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
+import { useLiveStatus, useSessionLiveStore } from '@/stores/sessionLiveStore'
 import {
   applyFilters,
   applySort,
@@ -70,6 +71,9 @@ function SessionDashboard() {
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
 
+  const watch = useSessionLiveStore((s) => s.watch)
+  const unwatch = useSessionLiveStore((s) => s.unwatch)
+
   useEffect(() => {
     let cancelled = false
     projectRepository.getById(numericProjectId).then((p) => {
@@ -92,6 +96,19 @@ function SessionDashboard() {
     const base = applyFilters(sessions, filters, { cwd: project?.directory })
     return applySort(base, filters.sortPreset, prefs)
   }, [sessions, filters, prefs, project?.directory])
+
+  // Live-subscribe to every visible non-destroyed session so tile status
+  // updates as events flow, and tear down on leave. Destroyed sessions
+  // can't change state, so don't waste a subscription on them.
+  useEffect(() => {
+    const watching = filteredAndSorted
+      .filter((s) => !s.destroyedAt)
+      .map((s) => s.id)
+    for (const id of watching) watch(numericHostId, id)
+    return () => {
+      for (const id of watching) unwatch(numericHostId, id)
+    }
+  }, [filteredAndSorted, numericHostId, watch, unwatch])
 
   const availableModes = useMemo(() => {
     const set = new Set<string>()
@@ -407,10 +424,12 @@ function SessionTile({
   const running = isSessionRunning(record)
   const mode = sessionMode(record)
   const cwd = sessionCwd(record)
+  const live = useLiveStatus(record.id)
   const name = sessionDisplayName(
     record,
     alias ? { sessionId: record.id, hostId: 0, alias } : undefined,
   )
+  const lastActivity = live?.lastActivityAt ?? record.destroyedAt ?? record.createdAt
 
   return (
     <Card
@@ -426,7 +445,16 @@ function SessionTile({
               onCheckedChange={onToggle}
               aria-label="Select session"
             />
-            <StatusDot running={running} />
+            <StatusDot running={running} streaming={!!live?.streaming} />
+            {live?.pendingPermission && (
+              <Badge
+                variant="outline"
+                className="gap-1 border-amber-500/50 text-amber-600 dark:text-amber-400"
+              >
+                <HelpCircle className="size-3" />
+                needs input
+              </Badge>
+            )}
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -490,22 +518,36 @@ function SessionTile({
         )}
 
         <div className="mt-auto flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{formatRelative(record.createdAt, record.destroyedAt)}</span>
+          <div className="flex items-center gap-3">
+            {live && live.fileChanges > 0 && (
+              <span className="flex items-center gap-1" title="File edits">
+                <FilePen className="size-3" />
+                {live.fileChanges}
+              </span>
+            )}
+            {live && live.toolCalls > 0 && (
+              <span className="flex items-center gap-1" title="Tool calls">
+                <Hammer className="size-3" />
+                {live.toolCalls}
+              </span>
+            )}
+          </div>
+          <span>{formatRelative(lastActivity, record.destroyedAt)}</span>
         </div>
       </CardContent>
     </Card>
   )
 }
 
-function StatusDot({ running }: { running: boolean }) {
+function StatusDot({ running, streaming }: { running: boolean; streaming: boolean }) {
+  const color = streaming
+    ? 'animate-pulse bg-sky-500'
+    : running
+      ? 'bg-emerald-500'
+      : 'bg-muted-foreground/40'
+  const label = streaming ? 'streaming' : running ? 'running' : 'completed'
   return (
-    <span
-      className={
-        'inline-block size-2 rounded-full ' +
-        (running ? 'animate-pulse bg-emerald-500' : 'bg-muted-foreground/40')
-      }
-      aria-label={running ? 'running' : 'completed'}
-    />
+    <span className={`inline-block size-2 rounded-full ${color}`} aria-label={label} title={label} />
   )
 }
 
