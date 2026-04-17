@@ -112,18 +112,13 @@ function ChatScreen() {
   }
 
   function openAsPrimary(newPrimary: string) {
-    if (newPrimary === sessionId) return
-    // Keep current extras minus the new primary (if it was already in view).
-    const keptExtras = extraPanes.filter((id) => id !== newPrimary)
-    // The old primary becomes an extra IF there's room and it isn't already there.
-    if (keptExtras.length < MAX_PANES_DESKTOP - 1 && !keptExtras.includes(sessionId)) {
-      keptExtras.unshift(sessionId)
-    }
-    const nextExtra = keptExtras.join(',') || undefined
+    if (newPrimary === sessionId && extraPanes.length === 0) return
+    // Plain switch: drop all extras and make this the only open session.
+    // Use the sidebar "+" to explicitly add panes.
     navigate({
       to: '/chat/$hostId/$sessionId',
       params: { hostId: String(numericHostId), sessionId: newPrimary },
-      search: nextExtra ? { extra: nextExtra } : {},
+      search: {},
     })
   }
 
