@@ -79,6 +79,13 @@ export function registerEventRoutes(app: FastifyInstance, db: DbHandle) {
             ? [req.body as EventPayload]
             : []
 
+      // Auto-upsert a shell session row so clients can POST events
+      // without having registered the session first (happens when the
+      // session was created while the companion was offline).
+      const ensureSession = db.raw.prepare(
+        `INSERT OR IGNORE INTO sessions (id, created_at, updated_at)
+         VALUES (?, ?, ?)`,
+      )
       const stmt = db.raw.prepare(
         `INSERT OR IGNORE INTO events
           (id, session_id, event_index, sender, created_at, connection_id, payload)
@@ -86,6 +93,8 @@ export function registerEventRoutes(app: FastifyInstance, db: DbHandle) {
           (@id, @session_id, @event_index, @sender, @created_at, @connection_id, @payload)`,
       )
       const tx = db.raw.transaction((evts: EventPayload[]) => {
+        const now = Date.now()
+        ensureSession.run(req.params.id, now, now)
         let inserted = 0
         for (const e of evts) {
           const result = stmt.run({
