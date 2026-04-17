@@ -32,7 +32,12 @@ async function listRecordsForHost(hostId: number): Promise<SessionRecord[]> {
   const host = await requireHost(hostId)
   const sdk = await connectToHost(host)
   const page = await sdk.listSessions({ limit: 200 })
-  return page.items.map((s) => s.toRecord())
+  // The SDK's persist driver keeps destroyed sessions (destroyedAt set)
+  // indefinitely and doesn't expose a delete primitive. Filter them out
+  // client-side so the dashboard matches user expectations after deletes.
+  return page.items
+    .map((s) => s.toRecord())
+    .filter((r) => !r.destroyedAt)
 }
 
 export const useSessionStore = create<SessionStoreState>()(
