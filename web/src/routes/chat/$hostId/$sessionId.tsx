@@ -82,6 +82,25 @@ function ChatScreen() {
     })
   }
 
+  function closePane(paneId: string) {
+    // Closing the primary pane: promote the first extra, or fall back to hosts.
+    if (paneId === sessionId) {
+      const nextPrimary = extraPanes[0]
+      if (nextPrimary) {
+        const rest = extraPanes.slice(1).join(',') || undefined
+        navigate({
+          to: '/chat/$hostId/$sessionId',
+          params: { hostId: String(numericHostId), sessionId: nextPrimary },
+          search: rest ? { extra: rest } : {},
+        })
+        return
+      }
+      navigate({ to: '/hosts' })
+      return
+    }
+    closeExtra(paneId)
+  }
+
   function onAfterDelete(deletedId: string) {
     if (deletedId === sessionId) {
       // Primary pane deleted — promote the next extra or return to hosts.
@@ -134,7 +153,7 @@ function ChatScreen() {
             panes={panes}
             activeTab={activeTab}
             onSelect={setActiveTab}
-            onClose={(id) => id !== sessionId && closeExtra(id)}
+            onClose={closePane}
           />
           <div className="flex min-h-0 flex-1 flex-col">
             {panes.map((id) => (
@@ -143,7 +162,7 @@ function ChatScreen() {
                   hostId={numericHostId}
                   sessionId={id}
                   isActive={id === activeTab}
-                  onClose={id !== sessionId ? () => closeExtra(id) : undefined}
+                  onClose={panes.length > 1 ? () => closePane(id) : undefined}
                   onAfterDelete={() => onAfterDelete(id)}
                 />
               </div>
@@ -158,7 +177,7 @@ function ChatScreen() {
               hostId={numericHostId}
               sessionId={id}
               isActive={id === sessionId}
-              onClose={id !== sessionId ? () => closeExtra(id) : undefined}
+              onClose={panes.length > 1 ? () => closePane(id) : undefined}
               onAfterDelete={() => onAfterDelete(id)}
             />
           ))}
@@ -233,7 +252,7 @@ function TabBar({
 }) {
   return (
     <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-muted/30 p-1">
-      {panes.map((id, idx) => (
+      {panes.map((id) => (
         <button
           key={id}
           type="button"
@@ -247,19 +266,17 @@ function TabBar({
         >
           <Pin className="size-3" />
           <span>{id.slice(0, 8)}</span>
-          {idx > 0 && (
-            <span
-              role="button"
-              tabIndex={-1}
-              className="ml-1 rounded px-1 text-muted-foreground hover:bg-muted"
-              onClick={(e) => {
-                e.stopPropagation()
-                onClose(id)
-              }}
-            >
-              ×
-            </span>
-          )}
+          <span
+            role="button"
+            tabIndex={-1}
+            className="ml-1 rounded px-1 text-muted-foreground hover:bg-muted"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose(id)
+            }}
+          >
+            ×
+          </span>
         </button>
       ))}
     </div>
