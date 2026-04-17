@@ -4,26 +4,18 @@ import { useMetadataStore, type RemoteSessionMeta } from '@/stores/metadataStore
 import { projectRepository, sessionPreferencesRepository } from '@/services/db'
 import { seedSessionIfMissing } from '@/services/sandboxAgent/client'
 
-// When the SDK connects to a host for the first time in this browser, pull
-// down the shared metadata file and use it to:
+// Pull metadata from the companion server (sessions + projects) and:
 //
-//   1) Hydrate the client-side persist driver with SessionRecords we've never
-//      seen locally but that exist in the metadata. This makes listSessions /
-//      resumeSession work on a fresh browser.
-//   2) Mirror project folders into Dexie so the dashboard has names, not
-//      just bare cwds.
-//   3) Mirror session aliases into sessionPreferences so tiles / headers
-//      show the user-given name.
-//
-// This is idempotent — re-running does nothing if Dexie already agrees with
-// the metadata.
+//   1) Seed the SDK's local persist driver with any sessions we don't have
+//      yet, so listSessions / resumeSession work on a fresh browser.
+//   2) Mirror companion projects into local Dexie (additive).
+//   3) Mirror companion aliases into sessionPreferences (fill-if-missing).
 
 export async function bootstrapFromMetadata(host: Host): Promise<void> {
-  const data = await useMetadataStore.getState().loadForHost(host.id)
-  if (!data) return
+  const bucket = await useMetadataStore.getState().loadForHost(host.id)
+  if (!bucket || bucket.offline) return
 
-  // 1. Seed SDK persist with any sessions we don't have locally.
-  for (const session of Object.values(data.sessions)) {
+  for (const session of Object.values(bucket.sessions)) {
     const record = buildSessionRecord(session)
     if (!record) continue
     try {
@@ -33,13 +25,10 @@ export async function bootstrapFromMetadata(host: Host): Promise<void> {
     }
   }
 
-  // 2. Mirror projects into Dexie (only adding new ones — never delete local
-  //    entries that aren't in the remote, since the user may not have saved
-  //    them to the remote yet).
   const existing = await projectRepository.getByHost(host.id)
   const existingByDir = new Map<string, ProjectFolder>()
   for (const p of existing) existingByDir.set(p.directory, p)
-  for (const rp of data.projects) {
+  for (const rp of bucket.projects) {
     if (existingByDir.has(rp.directory)) continue
     try {
       await projectRepository.upsert({
@@ -52,8 +41,7 @@ export async function bootstrapFromMetadata(host: Host): Promise<void> {
     }
   }
 
-  // 3. Mirror aliases into sessionPreferences (only filling in missing ones).
-  for (const session of Object.values(data.sessions)) {
+  for (const session of Object.values(bucket.sessions)) {
     if (!session.alias) continue
     const pref = await sessionPreferencesRepository.get(session.id)
     if (pref?.alias) continue

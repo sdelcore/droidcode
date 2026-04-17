@@ -22,6 +22,8 @@ function AddHost() {
   const [port, setPort] = useState('2468')
   const [isSecure, setIsSecure] = useState(false)
   const [token, setToken] = useState('')
+  const [companionUrl, setCompanionUrl] = useState('')
+  const [companionToken, setCompanionToken] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -49,6 +51,8 @@ function AddHost() {
         port: portNum,
         isSecure,
         token: token.trim() || undefined,
+        companionUrl: companionUrl.trim() || undefined,
+        companionToken: companionToken.trim() || undefined,
       })
       toast.success(`Added ${created.name}`)
       navigate({ to: '/projects/$hostId', params: { hostId: String(created.id) } })
@@ -118,6 +122,32 @@ function AddHost() {
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="Leave blank for --no-token daemons"
+                type="password"
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="companion">Companion server URL (optional)</Label>
+              <Input
+                id="companion"
+                value={companionUrl}
+                onChange={(e) => setCompanionUrl(e.target.value)}
+                placeholder={`http://${host || 'host'}:2469`}
+              />
+              <p className="text-xs text-muted-foreground">
+                droidcode-server location for cross-device state. If blank,
+                we'll try port 2469 on the same host.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="companionToken">Companion token (optional)</Label>
+              <Input
+                id="companionToken"
+                value={companionToken}
+                onChange={(e) => setCompanionToken(e.target.value)}
+                placeholder="Leave blank if DROIDCODE_TOKEN is unset"
                 type="password"
                 autoComplete="off"
               />

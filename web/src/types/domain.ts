@@ -11,6 +11,11 @@ export interface Host {
   port: number
   isSecure: boolean
   token?: string
+  // Base URL of the droidcode-server companion. If unset, we assume it
+  // runs at the same host with port 2469.
+  companionUrl?: string
+  // If set, sent as Bearer auth to the companion. Optional.
+  companionToken?: string
   lastConnected?: number
   createdAt: number
 }

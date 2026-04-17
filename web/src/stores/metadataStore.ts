@@ -1,14 +1,21 @@
 import { create } from 'zustand'
 import type { Host } from '@/types'
-import { metadataPath, readRemoteJson, writeRemoteJson } from '@/services/sync/remoteFs'
+import {
+  deleteProject as companionDeleteProject,
+  deleteSession as companionDeleteSession,
+  listProjects as companionListProjects,
+  listSessions as companionListSessions,
+  upsertProject as companionUpsertProject,
+  upsertSession as companionUpsertSession,
+  type CompanionProject,
+  type CompanionSession,
+} from '@/services/sync/companion'
 import { useHostStore } from './hostStore'
 
 export interface RemoteSessionMeta {
   id: string
   agent?: string
   alias?: string
-  // Captured at create time so other clients can seed their SDK persist
-  // driver and call resumeSession without first having the record.
   agentSessionId?: string
   lastConnectionId?: string
   sessionInit?: unknown
@@ -21,191 +28,211 @@ export interface RemoteProjectMeta {
   name: string
 }
 
-export interface RemoteMetadata {
-  schemaVersion: 1
-  sessions: Record<string, RemoteSessionMeta>
-  projects: RemoteProjectMeta[]
-}
-
 interface HostBucket {
   loading: boolean
   loaded: boolean
-  data: RemoteMetadata
+  sessions: Record<string, RemoteSessionMeta>
+  projects: RemoteProjectMeta[]
   error: string | null
+  // Companion unreachable — app still works in local-only mode.
+  offline: boolean
 }
 
 interface MetadataStoreState {
   byHost: Record<number, HostBucket>
 
-  loadForHost(hostId: number): Promise<RemoteMetadata | null>
+  loadForHost(hostId: number): Promise<HostBucket | null>
   upsertSession(hostId: number, session: RemoteSessionMeta): void
   removeSession(hostId: number, sessionId: string): void
   upsertProject(hostId: number, project: RemoteProjectMeta): void
   removeProject(hostId: number, directory: string): void
 }
 
-const WRITE_DEBOUNCE_MS = 800
-
-// Per-host pending-write timers + in-flight write promises so concurrent
-// mutations coalesce into one PUT.
-const pendingWrites = new Map<number, ReturnType<typeof setTimeout>>()
-const inflightWrites = new Map<number, Promise<void>>()
-
-function emptyMetadata(): RemoteMetadata {
-  return { schemaVersion: 1, sessions: {}, projects: [] }
-}
+const pendingUpserts = new Map<string, ReturnType<typeof setTimeout>>()
 
 function emptyBucket(): HostBucket {
-  return {
-    loading: false,
-    loaded: false,
-    data: emptyMetadata(),
-    error: null,
-  }
+  return { loading: false, loaded: false, sessions: {}, projects: [], error: null, offline: false }
 }
 
 function getHost(hostId: number): Host | undefined {
   return useHostStore.getState().hosts.find((h) => h.id === hostId)
 }
 
-async function performWrite(hostId: number, data: RemoteMetadata): Promise<void> {
-  const host = getHost(hostId)
-  if (!host) return
-  const path = await metadataPath(host)
-  await writeRemoteJson(host, path, data)
+function sessionFromCompanion(s: CompanionSession): RemoteSessionMeta {
+  return {
+    id: s.id,
+    agent: s.agent ?? undefined,
+    alias: s.alias ?? undefined,
+    agentSessionId: s.agentSessionId ?? undefined,
+    lastConnectionId: s.lastConnectionId ?? undefined,
+    sessionInit: s.sessionInit ?? undefined,
+    createdAt: s.createdAt ?? undefined,
+    destroyedAt: s.destroyedAt ?? undefined,
+  }
 }
 
-function scheduleWrite(get: () => MetadataStoreState, hostId: number): void {
-  const existing = pendingWrites.get(hostId)
+function sessionToCompanion(meta: RemoteSessionMeta): CompanionSession {
+  return {
+    id: meta.id,
+    agent: meta.agent ?? null,
+    agentSessionId: meta.agentSessionId ?? null,
+    lastConnectionId: meta.lastConnectionId ?? null,
+    alias: meta.alias ?? null,
+    sessionInit: meta.sessionInit ?? null,
+    createdAt: meta.createdAt ?? null,
+    destroyedAt: meta.destroyedAt ?? null,
+  }
+}
+
+function projectFromCompanion(p: CompanionProject): RemoteProjectMeta {
+  return { directory: p.directory, name: p.name }
+}
+
+// 400ms debounce per (hostId, sessionId) so a rename + small follow-up
+// doesn't fire two PUTs. Simpler than the old full-blob debounce.
+function queueSessionWrite(
+  hostId: number,
+  session: RemoteSessionMeta,
+): void {
+  const key = `${hostId}:s:${session.id}`
+  const existing = pendingUpserts.get(key)
   if (existing) clearTimeout(existing)
-  const timer = setTimeout(() => {
-    pendingWrites.delete(hostId)
-    const bucket = get().byHost[hostId]
-    if (!bucket) return
-    const data = bucket.data
-    const p = performWrite(hostId, data).catch((err) => {
-      console.error('metadata write failed', err)
-    })
-    inflightWrites.set(hostId, p)
-    p.finally(() => {
-      if (inflightWrites.get(hostId) === p) inflightWrites.delete(hostId)
-    })
-  }, WRITE_DEBOUNCE_MS)
-  pendingWrites.set(hostId, timer)
+  const timer = setTimeout(async () => {
+    pendingUpserts.delete(key)
+    const host = getHost(hostId)
+    if (!host) return
+    try {
+      const latest = useMetadataStore.getState().byHost[hostId]?.sessions[session.id] ?? session
+      await companionUpsertSession(host, sessionToCompanion(latest))
+      markOffline(hostId, false)
+    } catch (err) {
+      console.error('companion upsertSession failed', err)
+      markOffline(hostId, true)
+    }
+  }, 400)
+  pendingUpserts.set(key, timer)
+}
+
+function queueProjectWrite(hostId: number, project: RemoteProjectMeta): void {
+  const key = `${hostId}:p:${project.directory}`
+  const existing = pendingUpserts.get(key)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(async () => {
+    pendingUpserts.delete(key)
+    const host = getHost(hostId)
+    if (!host) return
+    try {
+      await companionUpsertProject(host, project)
+      markOffline(hostId, false)
+    } catch (err) {
+      console.error('companion upsertProject failed', err)
+      markOffline(hostId, true)
+    }
+  }, 400)
+  pendingUpserts.set(key, timer)
+}
+
+function markOffline(hostId: number, offline: boolean): void {
+  useMetadataStore.setState((state) => {
+    const bucket = state.byHost[hostId]
+    if (!bucket || bucket.offline === offline) return state
+    return { byHost: { ...state.byHost, [hostId]: { ...bucket, offline } } }
+  })
 }
 
 export const useMetadataStore = create<MetadataStoreState>()((set, get) => ({
   byHost: {},
 
   async loadForHost(hostId) {
-    const bucket = get().byHost[hostId]
-    if (bucket?.loaded || bucket?.loading) {
-      return bucket.data
-    }
-    const next: HostBucket = { ...emptyBucket(), loading: true }
-    set((state) => ({ byHost: { ...state.byHost, [hostId]: next } }))
+    const existing = get().byHost[hostId]
+    if (existing?.loaded || existing?.loading) return existing
 
     const host = getHost(hostId)
-    if (!host) {
-      set((state) => ({
-        byHost: {
-          ...state.byHost,
-          [hostId]: { ...next, loading: false, error: 'host not found' },
-        },
-      }))
-      return null
-    }
+    if (!host) return null
+
+    set((state) => ({
+      byHost: { ...state.byHost, [hostId]: { ...emptyBucket(), loading: true } },
+    }))
 
     try {
-      const path = await metadataPath(host)
-      const remote = await readRemoteJson<RemoteMetadata>(host, path)
-      const data: RemoteMetadata = remote && remote.schemaVersion === 1
-        ? {
-            schemaVersion: 1,
-            sessions: remote.sessions ?? {},
-            projects: remote.projects ?? [],
-          }
-        : emptyMetadata()
-      set((state) => ({
-        byHost: {
-          ...state.byHost,
-          [hostId]: { loading: false, loaded: true, data, error: null },
-        },
-      }))
-      return data
+      const [sessions, projects] = await Promise.all([
+        companionListSessions(host),
+        companionListProjects(host),
+      ])
+      const byId: Record<string, RemoteSessionMeta> = {}
+      for (const s of sessions) byId[s.id] = sessionFromCompanion(s)
+      const bucket: HostBucket = {
+        loading: false,
+        loaded: true,
+        sessions: byId,
+        projects: projects.map(projectFromCompanion),
+        error: null,
+        offline: false,
+      }
+      set((state) => ({ byHost: { ...state.byHost, [hostId]: bucket } }))
+      return bucket
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'metadata load failed'
-      set((state) => ({
-        byHost: {
-          ...state.byHost,
-          [hostId]: { ...next, loading: false, loaded: true, error: message },
-        },
-      }))
-      return null
+      const bucket: HostBucket = {
+        loading: false,
+        loaded: true,
+        sessions: {},
+        projects: [],
+        error: error instanceof Error ? error.message : 'companion load failed',
+        offline: true,
+      }
+      set((state) => ({ byHost: { ...state.byHost, [hostId]: bucket } }))
+      return bucket
     }
   },
 
   upsertSession(hostId, session) {
     const bucket = get().byHost[hostId] ?? emptyBucket()
-    const next = {
+    const merged: RemoteSessionMeta = { ...bucket.sessions[session.id], ...session }
+    const next: HostBucket = {
       ...bucket,
-      data: {
-        ...bucket.data,
-        sessions: { ...bucket.data.sessions, [session.id]: { ...bucket.data.sessions[session.id], ...session } },
-      },
+      sessions: { ...bucket.sessions, [session.id]: merged },
     }
     set((state) => ({ byHost: { ...state.byHost, [hostId]: next } }))
-    scheduleWrite(get, hostId)
+    queueSessionWrite(hostId, merged)
   },
 
   removeSession(hostId, sessionId) {
     const bucket = get().byHost[hostId]
-    if (!bucket) return
-    if (!(sessionId in bucket.data.sessions)) return
-    const { [sessionId]: _removed, ...rest } = bucket.data.sessions
+    if (!bucket || !(sessionId in bucket.sessions)) return
+    const { [sessionId]: _removed, ...rest } = bucket.sessions
     void _removed
-    const next = {
-      ...bucket,
-      data: { ...bucket.data, sessions: rest },
-    }
-    set((state) => ({ byHost: { ...state.byHost, [hostId]: next } }))
-    scheduleWrite(get, hostId)
+    set((state) => ({
+      byHost: { ...state.byHost, [hostId]: { ...bucket, sessions: rest } },
+    }))
+    const host = getHost(hostId)
+    if (!host) return
+    companionDeleteSession(host, sessionId).catch((err) => {
+      console.error('companion deleteSession failed', err)
+      markOffline(hostId, true)
+    })
   },
 
   upsertProject(hostId, project) {
     const bucket = get().byHost[hostId] ?? emptyBucket()
-    const filtered = bucket.data.projects.filter((p) => p.directory !== project.directory)
-    const next = {
-      ...bucket,
-      data: { ...bucket.data, projects: [...filtered, project] },
-    }
+    const filtered = bucket.projects.filter((p) => p.directory !== project.directory)
+    const next: HostBucket = { ...bucket, projects: [...filtered, project] }
     set((state) => ({ byHost: { ...state.byHost, [hostId]: next } }))
-    scheduleWrite(get, hostId)
+    queueProjectWrite(hostId, project)
   },
 
   removeProject(hostId, directory) {
     const bucket = get().byHost[hostId]
     if (!bucket) return
-    const filtered = bucket.data.projects.filter((p) => p.directory !== directory)
-    if (filtered.length === bucket.data.projects.length) return
-    const next = {
-      ...bucket,
-      data: { ...bucket.data, projects: filtered },
-    }
-    set((state) => ({ byHost: { ...state.byHost, [hostId]: next } }))
-    scheduleWrite(get, hostId)
+    const filtered = bucket.projects.filter((p) => p.directory !== directory)
+    if (filtered.length === bucket.projects.length) return
+    set((state) => ({
+      byHost: { ...state.byHost, [hostId]: { ...bucket, projects: filtered } },
+    }))
+    const host = getHost(hostId)
+    if (!host) return
+    companionDeleteProject(host, directory).catch((err) => {
+      console.error('companion deleteProject failed', err)
+      markOffline(hostId, true)
+    })
   },
 }))
-
-export async function flushPendingWrites(): Promise<void> {
-  const timers = Array.from(pendingWrites.entries())
-  for (const [hostId, timer] of timers) {
-    clearTimeout(timer)
-    pendingWrites.delete(hostId)
-    const bucket = useMetadataStore.getState().byHost[hostId]
-    if (bucket) {
-      inflightWrites.set(hostId, performWrite(hostId, bucket.data))
-    }
-  }
-  await Promise.allSettled([...inflightWrites.values()])
-}
