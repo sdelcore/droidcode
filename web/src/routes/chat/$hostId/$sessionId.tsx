@@ -6,11 +6,20 @@ import {
   useParams,
   useSearch,
 } from '@tanstack/react-router'
-import { Pin, Plus } from 'lucide-react'
+import { ArrowLeft, PanelLeft, Pin, Plus } from 'lucide-react'
 import { AddPaneDialog } from '@/components/chat/AddPaneDialog'
 import { ChatPane } from '@/components/chat/ChatPane'
+import { SessionSidebar } from '@/components/chat/SessionSidebar'
 import { Button } from '@/components/ui/button'
-import { useHostStore } from '@/stores'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import { projectRepository } from '@/services/db'
+import { useHostStore, useSessionStore } from '@/stores'
+import type { ProjectFolder } from '@/types'
 
 interface ChatSearch {
   extra?: string
@@ -55,6 +64,35 @@ function ChatScreen() {
 
   const [activeTab, setActiveTab] = useState<string>(sessionId)
   const [addPaneOpen, setAddPaneOpen] = useState(false)
+  const [sidebarOpenMobile, setSidebarOpenMobile] = useState(false)
+  const [sidebarCollapsedDesktop, setSidebarCollapsedDesktop] = useState(false)
+  const [projectsForHost, setProjectsForHost] = useState<ProjectFolder[]>([])
+
+  const sessions = useSessionStore((s) => s.byHost[numericHostId])
+
+  // Derive which dashboard the "Back" button should link to, by matching
+  // the primary pane's cwd against known remembered project folders.
+  useEffect(() => {
+    let cancelled = false
+    projectRepository.getByHost(numericHostId).then((rows) => {
+      if (!cancelled) setProjectsForHost(rows)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [numericHostId])
+
+  const backTarget = useMemo(() => {
+    const primary = sessions?.find((s) => s.id === sessionId)
+    const cwd = (primary?.sessionInit as { cwd?: string } | undefined)?.cwd
+    const project = cwd ? projectsForHost.find((p) => p.directory === cwd) : undefined
+    const params: Record<string, string> = { hostId: String(numericHostId) }
+    if (project) {
+      params.projectId = String(project.id)
+      return { to: '/sessions/$hostId/$projectId', params }
+    }
+    return { to: '/projects/$hostId', params }
+  }, [sessions, sessionId, projectsForHost, numericHostId])
 
   useEffect(() => {
     // If the primary pane changes (route navigation), reset active tab to it.
@@ -71,6 +109,22 @@ function ChatScreen() {
       search: { extra: nextExtras },
     })
     setActiveTab(extraSessionId)
+  }
+
+  function openAsPrimary(newPrimary: string) {
+    if (newPrimary === sessionId) return
+    // Keep current extras minus the new primary (if it was already in view).
+    const keptExtras = extraPanes.filter((id) => id !== newPrimary)
+    // The old primary becomes an extra IF there's room and it isn't already there.
+    if (keptExtras.length < MAX_PANES_DESKTOP - 1 && !keptExtras.includes(sessionId)) {
+      keptExtras.unshift(sessionId)
+    }
+    const nextExtra = keptExtras.join(',') || undefined
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: { hostId: String(numericHostId), sessionId: newPrimary },
+      search: nextExtra ? { extra: nextExtra } : {},
+    })
   }
 
   function closeExtra(extraId: string) {
@@ -131,6 +185,18 @@ function ChatScreen() {
     )
   }
 
+  const sidebarNode = (
+    <SessionSidebar
+      hostId={numericHostId}
+      panes={panes}
+      primarySessionId={sessionId}
+      extraPanes={extraPanes}
+      onOpenPrimary={openAsPrimary}
+      onAddPane={addExtraPane}
+      onRemovePane={closePane}
+    />
+  )
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <TopBar
@@ -139,6 +205,10 @@ function ChatScreen() {
         paneCount={panes.length}
         canPin={panes.length < MAX_PANES_DESKTOP}
         onAddPane={() => setAddPaneOpen(true)}
+        backTo={backTarget}
+        sidebarCollapsed={sidebarCollapsedDesktop}
+        onToggleSidebar={() => setSidebarCollapsedDesktop((v) => !v)}
+        onOpenMobileSidebar={() => setSidebarOpenMobile(true)}
       />
       <AddPaneDialog
         hostId={numericHostId}
@@ -147,7 +217,34 @@ function ChatScreen() {
         onOpenChange={setAddPaneOpen}
         onSelect={addExtraPane}
       />
-      {isNarrow && panes.length > 1 ? (
+
+      <Sheet open={sidebarOpenMobile} onOpenChange={setSidebarOpenMobile}>
+        <SheetContent side="left" className="flex w-72 flex-col p-0">
+          <SheetHeader className="border-b border-border p-3">
+            <SheetTitle className="text-sm">Sessions on {host.name}</SheetTitle>
+          </SheetHeader>
+          <div
+            className="flex min-h-0 flex-1"
+            onClick={() => setSidebarOpenMobile(false)}
+          >
+            {sidebarNode}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <div className="flex min-h-0 flex-1 flex-row">
+        {!isNarrow && !sidebarCollapsedDesktop && (
+          <div className="hidden w-64 shrink-0 md:flex">{sidebarNode}</div>
+        )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {renderPanes()}
+        </div>
+      </div>
+    </div>
+  )
+
+  function renderPanes() {
+    return isNarrow && panes.length > 1 ? (
         <>
           <TabBar
             panes={panes}
@@ -182,9 +279,8 @@ function ChatScreen() {
             />
           ))}
         </div>
-      )}
-    </div>
-  )
+      )
+  }
 }
 
 function TopBar({
@@ -192,20 +288,57 @@ function TopBar({
   paneCount,
   canPin,
   onAddPane,
+  backTo,
+  sidebarCollapsed,
+  onToggleSidebar,
+  onOpenMobileSidebar,
 }: {
   hostName: string
   hostId: number
   paneCount: number
   canPin: boolean
   onAddPane(): void
+  backTo: { to: string; params?: Record<string, string> }
+  sidebarCollapsed: boolean
+  onToggleSidebar(): void
+  onOpenMobileSidebar(): void
 }) {
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Link to="/" className="font-semibold text-foreground hover:opacity-80">
-          DroidCode
+      <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+        {/* Mobile: open sidebar sheet */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-7 md:hidden"
+          onClick={onOpenMobileSidebar}
+          aria-label="Open sessions sidebar"
+        >
+          <PanelLeft className="size-4" />
+        </Button>
+        {/* Desktop: collapse sidebar column */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className="hidden size-7 md:inline-flex"
+          onClick={onToggleSidebar}
+          aria-label={sidebarCollapsed ? 'Show sessions sidebar' : 'Hide sessions sidebar'}
+          title={sidebarCollapsed ? 'Show sessions sidebar' : 'Hide sessions sidebar'}
+        >
+          <PanelLeft className="size-4" />
+        </Button>
+
+        <Link
+          to={backTo.to}
+          params={backTo.params}
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-foreground hover:bg-muted"
+          title="Back to session grid"
+        >
+          <ArrowLeft className="size-3.5" />
+          <span className="hidden sm:inline">Back</span>
         </Link>
-        <span className="opacity-50">/</span>
+
+        <span className="opacity-50">·</span>
         <Link to="/hosts" className="hover:text-foreground">
           {hostName}
         </Link>
@@ -224,9 +357,9 @@ function TopBar({
           title={canPin ? 'Open another session in a pane' : 'Max panes open'}
         >
           <Plus className="size-3.5" />
-          Add pane
+          <span className="hidden sm:inline">Add pane</span>
         </Button>
-        <nav className="flex items-center gap-3">
+        <nav className="hidden items-center gap-3 sm:flex">
           <Link to="/hosts" className="hover:text-foreground">
             Hosts
           </Link>
