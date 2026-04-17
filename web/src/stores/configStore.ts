@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { AgentInfo } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
 import { hostModelDefaultsRepository } from '@/services/db'
-import { useHostStore } from './hostStore'
+import { requireHost } from './hostStore'
 import type { HostModelDefault } from '@/types'
 
 interface ConfigStoreState {
@@ -27,8 +27,7 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => ({
     if (!options?.force && get().agentsByHost[hostId]) return
     set({ isLoading: true, error: null })
     try {
-      const host = useHostStore.getState().hosts.find((h) => h.id === hostId)
-      if (!host) throw new Error(`Host ${hostId} not found`)
+      const host = await requireHost(hostId)
       const sdk = await connectToHost(host)
       const res = await sdk.listAgents({ config: true })
       set({

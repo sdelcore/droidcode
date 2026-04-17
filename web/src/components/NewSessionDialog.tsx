@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import type { AgentInfo } from 'sandbox-agent'
 import { useConfigStore, useSessionStore } from '@/stores'
+import { sessionPreferencesRepository } from '@/services/db'
+import { formatError } from '@/services/errors/formatError'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -10,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 interface NewSessionDialogProps {
@@ -20,6 +23,8 @@ interface NewSessionDialogProps {
   onCreated(sessionId: string): void
 }
 
+const EMPTY_AGENTS: AgentInfo[] = []
+
 export function NewSessionDialog({
   hostId,
   cwd,
@@ -27,15 +32,19 @@ export function NewSessionDialog({
   onOpenChange,
   onCreated,
 }: NewSessionDialogProps) {
-  const agents = useConfigStore((s) => s.agentsByHost[hostId] ?? [])
+  const agents = useConfigStore((s) => s.agentsByHost[hostId] ?? EMPTY_AGENTS)
   const loadAgents = useConfigStore((s) => s.loadAgents)
   const createSession = useSessionStore((s) => s.createSession)
 
   const [selectedAgent, setSelectedAgent] = useState<string>('')
+  const [name, setName] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    if (open) loadAgents(hostId)
+    if (open) {
+      loadAgents(hostId)
+      setName('')
+    }
   }, [open, hostId, loadAgents])
 
   const installed = agents.filter((a) => a.installed && a.credentialsAvailable)
@@ -51,10 +60,24 @@ export function NewSessionDialog({
     setSubmitting(true)
     try {
       const record = await createSession(hostId, { agent: selectedAgent, cwd })
+      const alias = name.trim()
+      if (alias) {
+        await sessionPreferencesRepository.save({
+          sessionId: record.id,
+          hostId,
+          agent: selectedAgent,
+          alias,
+        })
+      }
       onCreated(record.id)
       onOpenChange(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Create failed')
+      console.error('createSession failed', error)
+      const msg = formatError(error, 'Create failed')
+      const hint = /internal/i.test(msg)
+        ? `. Check that ${cwd} exists on the host and the agent has permission.`
+        : ''
+      toast.error(`${msg}${hint}`)
     } finally {
       setSubmitting(false)
     }
@@ -71,6 +94,18 @@ export function NewSessionDialog({
           <div>
             <Label className="text-xs text-muted-foreground">Directory</Label>
             <p className="truncate text-sm">{cwd}</p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="session-name" className="text-xs text-muted-foreground">
+              Name (optional)
+            </Label>
+            <Input
+              id="session-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Phase 7 plan"
+            />
           </div>
 
           <div className="flex flex-col gap-2">

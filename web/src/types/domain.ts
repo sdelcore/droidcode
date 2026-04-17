@@ -190,9 +190,11 @@ export interface HostModelDefault {
 export type MessageRole = 'user' | 'assistant'
 
 export interface MessagePart {
-  kind: 'text' | 'thought' | 'tool_call'
+  kind: 'text' | 'thought' | 'tool_call' | 'image'
   id: string
   content: string
+  dataUrl?: string
+  mimeType?: string
   toolName?: string
   toolStatus?: 'pending' | 'running' | 'complete' | 'error'
   toolOutput?: string

@@ -43,6 +43,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    // Allow access from LAN + tailnet for phone/mobile testing.
+    allowedHosts: ['nightman', '.cod-salary.ts.net', '.local'],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },

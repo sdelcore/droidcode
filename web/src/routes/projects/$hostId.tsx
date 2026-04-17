@@ -14,18 +14,21 @@ export const Route = createFileRoute('/projects/$hostId')({
   component: ProjectsForHost,
 })
 
+const EMPTY_PROJECTS: ProjectFolder[] = []
+const EMPTY_AGENTS: never[] = []
+
 function ProjectsForHost() {
   const { hostId } = useParams({ from: '/projects/$hostId' })
   const numericHostId = Number(hostId)
   const navigate = useNavigate()
 
   const host = useHostStore((s) => s.hosts.find((h) => h.id === numericHostId))
-  const projects = useProjectStore((s) => s.byHost[numericHostId] ?? [])
+  const projects = useProjectStore((s) => s.byHost[numericHostId] ?? EMPTY_PROJECTS)
   const loadForHost = useProjectStore((s) => s.loadForHost)
   const rememberProject = useProjectStore((s) => s.rememberProject)
   const removeProject = useProjectStore((s) => s.removeProject)
 
-  const agents = useConfigStore((s) => s.agentsByHost[numericHostId] ?? [])
+  const agents = useConfigStore((s) => s.agentsByHost[numericHostId] ?? EMPTY_AGENTS)
   const loadAgents = useConfigStore((s) => s.loadAgents)
   const agentsError = useConfigStore((s) => s.error)
 
@@ -39,7 +42,7 @@ function ProjectsForHost() {
 
   if (!host) {
     return (
-      <main className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
         <p className="text-sm text-muted-foreground">Host not found.</p>
         <Button asChild size="sm" variant="outline">
           <Link to="/hosts">Back to hosts</Link>
@@ -53,6 +56,14 @@ function ProjectsForHost() {
     const directory = newDir.trim()
     if (!directory) {
       toast.error('Directory required')
+      return
+    }
+    if (directory.startsWith('~')) {
+      toast.error('Use an absolute path — the daemon does not expand ~')
+      return
+    }
+    if (!directory.startsWith('/')) {
+      toast.error('Directory must be an absolute path starting with /')
       return
     }
     try {
@@ -77,7 +88,7 @@ function ProjectsForHost() {
   }
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6">
       <div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Link to="/hosts" className="hover:text-foreground">
@@ -122,7 +133,10 @@ function ProjectsForHost() {
 
         <Card>
           <CardContent className="pt-6">
-            <form className="grid grid-cols-[1fr_1fr_auto] items-end gap-2" onSubmit={handleAdd}>
+            <form
+              className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_1fr_auto]"
+              onSubmit={handleAdd}
+            >
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="dir">Directory</Label>
                 <Input

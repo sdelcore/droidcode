@@ -12,9 +12,11 @@ interface DebugLogEntry {
 
 interface SettingsStoreState {
   theme: ThemePreference
+  autoAcceptPermissions: boolean
   debugLogs: DebugLogEntry[]
 
   setTheme(theme: ThemePreference): void
+  setAutoAcceptPermissions(enabled: boolean): void
   log(level: DebugLogEntry['level'], message: string): void
   clearLogs(): void
 }
@@ -25,10 +27,15 @@ export const useSettingsStore = create<SettingsStoreState>()(
   persist(
     (set, get) => ({
       theme: 'system',
+      autoAcceptPermissions: true,
       debugLogs: [],
 
       setTheme(theme) {
         set({ theme })
+      },
+
+      setAutoAcceptPermissions(enabled) {
+        set({ autoAcceptPermissions: enabled })
       },
 
       log(level, message) {
@@ -44,7 +51,10 @@ export const useSettingsStore = create<SettingsStoreState>()(
     {
       name: 'droidcode:settings',
       storage: createJSONStorage(() => idbStorage),
-      partialize: (state) => ({ theme: state.theme }),
+      partialize: (state) => ({
+        theme: state.theme,
+        autoAcceptPermissions: state.autoAcceptPermissions,
+      }),
     },
   ),
 )

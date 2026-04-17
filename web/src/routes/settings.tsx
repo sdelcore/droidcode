@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useSettingsStore } from '@/stores'
 
@@ -17,6 +18,8 @@ function Settings() {
   const { theme = 'system', setTheme } = useTheme()
   const debugLogs = useSettingsStore((s) => s.debugLogs)
   const clearLogs = useSettingsStore((s) => s.clearLogs)
+  const autoAcceptPermissions = useSettingsStore((s) => s.autoAcceptPermissions)
+  const setAutoAcceptPermissions = useSettingsStore((s) => s.setAutoAcceptPermissions)
 
   async function copyLogs() {
     if (debugLogs.length === 0) return
@@ -32,7 +35,7 @@ function Settings() {
   }
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
 
       <Card>
@@ -51,6 +54,30 @@ function Settings() {
               <ToggleGroupItem value="light">Light</ToggleGroupItem>
               <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
             </ToggleGroup>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Chat</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4 rounded border border-border p-3">
+            <div className="min-w-0">
+              <Label htmlFor="autoaccept" className="cursor-pointer">
+                Auto-accept permissions
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Replies "always" to every permission request without prompting.
+                Turn off to approve each tool call manually.
+              </p>
+            </div>
+            <Switch
+              id="autoaccept"
+              checked={autoAcceptPermissions}
+              onCheckedChange={setAutoAcceptPermissions}
+            />
           </div>
         </CardContent>
       </Card>

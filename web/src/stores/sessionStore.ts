@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { SessionCreateRequest, SessionRecord } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
-import { useHostStore } from './hostStore'
+import { requireHost } from './hostStore'
 import { idbStorage } from './idbStorage'
 import {
   DEFAULT_SESSION_FILTERS,
@@ -28,8 +28,7 @@ interface SessionStoreState {
 }
 
 async function listRecordsForHost(hostId: number): Promise<SessionRecord[]> {
-  const host = useHostStore.getState().hosts.find((h) => h.id === hostId)
-  if (!host) throw new Error(`Host ${hostId} not found`)
+  const host = await requireHost(hostId)
   const sdk = await connectToHost(host)
   const page = await sdk.listSessions({ limit: 200 })
   return page.items.map((s) => s.toRecord())
@@ -60,8 +59,7 @@ export const useSessionStore = create<SessionStoreState>()(
       },
 
       async createSession(hostId, request) {
-        const host = useHostStore.getState().hosts.find((h) => h.id === hostId)
-        if (!host) throw new Error(`Host ${hostId} not found`)
+        const host = await requireHost(hostId)
         const sdk = await connectToHost(host)
         const session = await sdk.createSession(request)
         const record = session.toRecord()
@@ -73,8 +71,7 @@ export const useSessionStore = create<SessionStoreState>()(
       },
 
       async destroySession(hostId, sessionId) {
-        const host = useHostStore.getState().hosts.find((h) => h.id === hostId)
-        if (!host) throw new Error(`Host ${hostId} not found`)
+        const host = await requireHost(hostId)
         const sdk = await connectToHost(host)
         await sdk.destroySession(sessionId)
         const list = get().byHost[hostId] ?? []

@@ -46,6 +46,8 @@ export const Route = createFileRoute('/sessions/$hostId/$projectId/')({
   component: SessionList,
 })
 
+const EMPTY_SESSIONS: SessionRecord[] = []
+
 const SORT_PRESETS: { value: SortPreset; label: string }[] = [
   { value: 'recent', label: 'Most recent' },
   { value: 'workflow', label: 'Workflow order' },
@@ -62,7 +64,7 @@ function SessionList() {
   const navigate = useNavigate()
 
   const host = useHostStore((s) => s.hosts.find((h) => h.id === numericHostId))
-  const sessions = useSessionStore((s) => s.byHost[numericHostId] ?? [])
+  const sessions = useSessionStore((s) => s.byHost[numericHostId] ?? EMPTY_SESSIONS)
   const filters = useSessionStore((s) => s.filters)
   const loadSessions = useSessionStore((s) => s.loadForHost)
   const destroySession = useSessionStore((s) => s.destroySession)
@@ -188,9 +190,9 @@ function SessionList() {
   }
 
   return (
-    <main className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:p-6">
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
           <Link to="/hosts" className="hover:text-foreground">
             Hosts
           </Link>
@@ -203,17 +205,22 @@ function SessionList() {
             {host.name}
           </Link>
           <span>/</span>
-          <span>{project?.name ?? 'Project'}</span>
+          <span className="truncate">{project?.name ?? 'Project'}</span>
         </div>
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold">Sessions</h1>
             <p className="truncate text-sm text-muted-foreground">
               {project?.directory ?? 'Loading project…'}
             </p>
           </div>
-          <Button size="sm" onClick={() => setNewSessionOpen(true)} disabled={!project}>
-            New session
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => setNewSessionOpen(true)}
+            disabled={!project}
+          >
+            New
           </Button>
         </div>
       </div>
@@ -471,11 +478,15 @@ function SessionRow({
             </span>
           </button>
           <div className="flex shrink-0 items-center gap-1.5">
-            {mode && <Badge variant="secondary">{mode}</Badge>}
+            {mode && (
+              <Badge variant="secondary" className="hidden sm:inline-flex">
+                {mode}
+              </Badge>
+            )}
             <Badge variant={running ? 'default' : 'outline'}>
               {running ? 'running' : 'completed'}
             </Badge>
-            <span className="text-xs text-muted-foreground">
+            <span className="hidden text-xs text-muted-foreground sm:inline">
               {new Date(record.createdAt).toLocaleDateString()}
             </span>
             <DropdownMenu>

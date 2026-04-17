@@ -17,6 +17,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { sessionPreferencesRepository } from '@/services/db'
 import { useChatStore, useHostStore, useSessionStore, useVisibilityStore } from '@/stores'
 
 export const Route = createFileRoute('/chat/$hostId/$sessionId')({
@@ -41,6 +42,7 @@ function ChatScreen() {
   const clearActiveSession = useVisibilityStore((s) => s.clearActiveSession)
 
   const [draft, setDraft] = useState('')
+  const [alias, setAlias] = useState<string | undefined>(undefined)
   const scrollAnchorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -51,6 +53,16 @@ function ChatScreen() {
       clearActiveSession()
     }
   }, [numericHostId, sessionId, openSession, closeSession, setActiveSession, clearActiveSession])
+
+  useEffect(() => {
+    let cancelled = false
+    sessionPreferencesRepository.get(sessionId).then((prefs) => {
+      if (!cancelled) setAlias(prefs?.alias)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId])
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -69,7 +81,7 @@ function ChatScreen() {
 
   if (!host) {
     return (
-      <main className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
+      <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:p-6">
         <p className="text-sm text-muted-foreground">Host not found.</p>
         <Button asChild size="sm" variant="outline">
           <Link to="/hosts">Back to hosts</Link>
@@ -79,29 +91,38 @@ function ChatScreen() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col">
-      <header className="flex items-center justify-between border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
-        <div className="flex min-w-0 flex-col">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Link to="/hosts" className="hover:text-foreground">
-              {host.name}
-            </Link>
-          </div>
-          <div className="flex items-center gap-2">
-            <h1 className="truncate font-mono text-sm">{sessionId}</h1>
-            <ConnectionIndicator status={status} streaming={isStreaming} />
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <header className="z-10 flex h-12 shrink-0 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link to="/" className="shrink-0 text-sm font-semibold">
+            DroidCode
+          </Link>
+          <span className="text-muted-foreground/50">/</span>
+          <Link to="/hosts" className="shrink-0 text-xs text-muted-foreground hover:text-foreground">
+            {host.name}
+          </Link>
+          <span className="text-muted-foreground/50">/</span>
+          <span className="truncate text-sm font-medium">
+            {alias || <span className="font-mono">{sessionId.slice(0, 8)}…</span>}
+          </span>
+          <ConnectionIndicator status={status} streaming={isStreaming} />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" aria-label="Session menu">
-              <MoreHorizontal className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={handleDelete}>Delete session</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex items-center gap-2">
+          <nav className="flex items-center gap-4 text-sm text-muted-foreground">
+            <Link to="/hosts" className="hover:text-foreground">Hosts</Link>
+            <Link to="/settings" className="hover:text-foreground">Settings</Link>
+          </nav>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" aria-label="Session menu">
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={handleDelete}>Delete session</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </header>
 
       {error && (
@@ -111,7 +132,7 @@ function ChatScreen() {
       )}
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-4xl flex-col gap-4 p-4">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4">
           {status === 'connecting' && messages.length === 0 && (
             <p className="text-sm text-muted-foreground">Connecting to session…</p>
           )}

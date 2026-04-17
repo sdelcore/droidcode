@@ -60,7 +60,7 @@ function AddHost() {
   }
 
   return (
-    <main className="mx-auto flex max-w-xl flex-col gap-4 p-6">
+    <main className="mx-auto flex w-full max-w-xl flex-col gap-4 p-4 sm:p-6">
       <Card>
         <CardHeader>
           <CardTitle>Add host</CardTitle>

@@ -43,7 +43,50 @@ export class MessageAccumulator {
     }
   }
 
+  // Append a user message from a client session/prompt event, creating a
+  // turn boundary so the agent's reply opens a fresh assistant bubble.
+  pushUserMessage(
+    prompt: ExtractedPrompt,
+    event?: SessionEvent,
+  ): void {
+    const last = this.state.messages[this.state.messages.length - 1]
+    if (last) last.isStreaming = false
+    const id = event ? `u:${event.id}` : `u:${Date.now()}:${this.state.messages.length}`
+
+    const parts: MessagePart[] = []
+    for (let i = 0; i < prompt.images.length; i++) {
+      const img = prompt.images[i]
+      parts.push({
+        kind: 'image',
+        id: `${id}:img:${i}`,
+        content: '',
+        dataUrl: `data:${img.mimeType};base64,${img.data}`,
+        mimeType: img.mimeType,
+      })
+    }
+    if (prompt.text) {
+      parts.push({ kind: 'text', id: `${id}:${parts.length}`, content: prompt.text })
+    }
+
+    this.state.messages.push({
+      id,
+      role: 'user',
+      parts,
+      isStreaming: false,
+      createdAt: event?.createdAt ?? Date.now(),
+    })
+    this.state.lastMessageIdByRole.assistant = undefined
+  }
+
   push(event: SessionEvent): void {
+    // Rivet doesn't emit user_message_chunk for the client's own prompts,
+    // so synthesize a user message from the session/prompt request.
+    const prompt = extractClientPrompt(event)
+    if (prompt !== undefined) {
+      this.pushUserMessage(prompt, event)
+      return
+    }
+
     const update = extractSessionUpdate(event)
     if (!update) return
 
@@ -168,6 +211,52 @@ function extractSessionUpdate(event: SessionEvent): SessionUpdatePayload | undef
   if (payload.method !== 'session/update') return undefined
   const params = payload.params as { update?: SessionUpdatePayload } | undefined
   return params?.update
+}
+
+interface ExtractedPrompt {
+  text: string
+  images: Array<{ data: string; mimeType: string }>
+}
+
+// When the SDK resumes a session with stored events, the next session/prompt
+// it sends is prefixed with a synthetic text part starting with this string;
+// Rivet uses it to re-prime the agent's context. Show only the real user text.
+const REPLAY_PREFIX = 'Previous session history is replayed below'
+
+// Return the content of a client-sent `session/prompt` request, or
+// undefined if the event isn't one. Extracts both text and image blocks.
+function extractClientPrompt(event: SessionEvent): ExtractedPrompt | undefined {
+  if (event.sender !== 'client') return undefined
+  const payload = event.payload as { method?: string; params?: unknown } | null
+  if (!payload || typeof payload !== 'object') return undefined
+  if (payload.method !== 'session/prompt') return undefined
+  const params = payload.params as {
+    prompt?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
+  } | undefined
+  const prompt = params?.prompt
+  if (!Array.isArray(prompt)) return undefined
+
+  const text = prompt
+    .filter(
+      (p) =>
+        p.type === 'text' &&
+        typeof p.text === 'string' &&
+        !p.text.startsWith(REPLAY_PREFIX),
+    )
+    .map((p) => p.text!)
+    .join('')
+
+  const images = prompt
+    .filter((p): p is { type: 'image'; data: string; mimeType: string } =>
+      p.type === 'image' && typeof p.data === 'string' && typeof p.mimeType === 'string',
+    )
+    .map((p) => ({ data: p.data, mimeType: p.mimeType }))
+
+  // A prompt that was *only* a replay prefix (no real user text or images)
+  // is an SDK internal signal; don't render it as an empty user bubble.
+  if (!text && images.length === 0) return undefined
+
+  return { text, images }
 }
 
 function mapStatus(
