@@ -1,231 +1,152 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repo.
 
-## Project Overview
+## Repo overview
 
-DroidCode Expo is a React Native (Expo) client for [OpenCode](https://github.com/sst/opencode), the open-source AI coding agent. It connects to OpenCode servers and provides a mobile interface for interacting with AI agents.
+DroidCode is a web + desktop + Android Tauri client for
+[Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent). It's
+mid-migration from a React Native / Expo app at the repo root to a
+Vite + Tauri stack under `web/`.
 
-This is the cross-platform version of DroidCode, targeting both iOS and Android.
+* **New stack lives in `web/` and `server/`** — all new work goes here.
+* **Legacy stack is everything else at the repo root** — frozen, retires
+  in Phase 10 of `migration.md`.
+* **`server/` is a new Node + Fastify + SQLite companion** (port 2469)
+  that sits next to `sandbox-agent` (port 2468) to hold shared session
+  metadata + mirrored event history so multiple browsers converge.
 
-## Development Environment
+For conventions, architecture rules, and pitfalls, **read `AGENTS.md`
+first.** It's the canonical style guide for new-stack work.
 
-This project uses Nix flakes for reproducible development. **All commands must be run inside `nix develop`.**
+For the end-to-end migration plan and decisions, **read `migration.md`.**
 
-```bash
-# Enter the Nix development shell (required before running any commands)
-nix develop
+## Running locally
 
-# Install dependencies
-npm install
-
-# Start development server
-npx expo start
-
-# Clear cache and start (use after cleaning node_modules)
-npx expo start --clear
-
-# Run on iOS simulator
-npx expo run:ios
-
-# Run on Android emulator
-npx expo run:android
-```
-
-### Important: Always use `nix develop`
-
-When running commands from outside the shell, prefix with `nix develop --command`:
+Everything assumes `nix develop` (direnv handles it automatically).
 
 ```bash
-nix develop --command npm install
-nix develop --command npx expo start
+# 1. Sandbox-agent daemon (in ~/src/wagent)
+sandbox-agent server --no-token --host 0.0.0.0 --port 2468 \
+  --cors-allow-origin http://localhost:5173
+
+# 2. Companion server
+cd server && npm install && npm run start   # listens on :2469
+
+# 3. Web client
+cd web && npm install && npm run dev         # vite on :5173
 ```
 
-## Project Structure
+Open `http://localhost:5173`, add a host pointing at `localhost:2468`,
+leave companion URL blank (defaults to `:2469` on same hostname), and
+you're in.
 
-```
-app/          # Expo Router screens (file-based routing)
-stores/       # Zustand state management
-services/     # API, SSE, database, notifications, sync
-types/        # TypeScript definitions (api.ts, domain.ts, sse.ts)
-components/   # Reusable UI components
-providers/    # React context providers
-constants/    # Theme and configuration
-__tests__/    # Jest tests (unit, integration, components)
-```
-
-## Architecture
-
-- **Pattern**: MVI-like with Zustand stores
-- **Navigation**: Expo Router (file-based routing)
-- **State**: Zustand for global state, React state for local
-- **Persistence**: expo-sqlite for local database
-- **Networking**: Axios for REST, react-native-sse for SSE
-
-### Navigation Flow
-
-```
-/hosts → /projects/[hostId] → /sessions/[hostId]/[projectId] → /sessions/[hostId]/[projectId]/[sessionId]
-```
-
-## Key Stores
-
-### hostStore
-Server configurations. Methods: `initialize()`, `addHost()`, `removeHost()`, `refresh()`
-
-### projectStore
-OpenCode project instances. Methods: `loadProjects()`, `spawnProject()`, `stopProject()`
-
-### chatStore
-Chat session state. Methods: `loadSession()`, `sendMessage()`, `connect()`, `executeSlashCommand()`
-
-### sessionStore
-Session list management. Methods: `fetchSessions()`, `createSession()`, `deleteSession()`
-
-## SSE Event Flow
-
-1. **sseClient** connects to `/event` endpoint
-2. Events parsed and emitted via callbacks
-3. **chatStore** handles events in `handleSseEvent()`
-4. UI updates via Zustand state changes
-
-Key events: `message.start`, `message.delta`, `message.complete`, `session.updated`, `todo.updated`, `permission.requested`
-
-## Commands
-
-All commands below assume you are inside `nix develop` shell:
+## Key commands (inside `nix develop`)
 
 ```bash
-# Development
-npm start                         # Start dev server
-npm run android                   # Run on Android emulator
-npm run ios                       # Run on iOS simulator
-npx expo start --clear            # Clear cache and start
+# web
+cd web
+npm run dev                        # vite dev
+npm run dev -- --host 0.0.0.0      # bind LAN / tailnet
+npm run build                      # prod (tsc + vite + PWA)
+npm run typecheck                  # tsc -b --noEmit
+npm run lint                       # eslint
+npm run smoke                      # end-to-end SDK test
 
-# Testing
-npm test                          # Run all tests
-npm run test:unit                 # Unit tests only
-npm run test:integration          # Integration tests only
-npx jest __tests__/unit/stores/hostStore.test.ts  # Run single test file
-npx jest --testNamePattern="should load hosts"    # Run tests matching pattern
-npm run test:watch                # Watch mode
-npm run test:coverage             # Generate coverage report
+# tauri (same directory)
+cargo tauri dev
+cargo tauri build
 
-# Type checking and linting
-npm run typecheck                 # TypeScript check (run before commits)
-npm run lint                      # ESLint
+# server
+cd server
+npm run start
+npm run typecheck
 
-# Building and deployment
-npx expo prebuild                 # Generate native projects
-./scripts/push-update.sh          # Build APK and deploy
-
-# Clean rebuild (if node_modules gets bloated)
-rm -rf node_modules .expo && npm install && npx expo start --clear
+# legacy expo app (still works — don't add features)
+npm start                          # at repo root
+npm run typecheck
+npm run lint
 ```
 
-## Slash Commands
-
-Built-in commands handled in `chatStore.executeSlashCommand()`:
-
-- `/undo` - Revert to previous message
-- `/redo` - Restore reverted changes
-- `/compact` or `/summarize` - Summarize conversation
-- `/clear` - Clear local message display
-
-## API Reference
-
-**IMPORTANT**: Always refer to the official OpenCode Server API documentation for the authoritative API specification:
-- **Official Docs**: https://opencode.ai/docs/server
-
-Default server: `http://localhost:4096`
-
-Key endpoints (see `services/api/apiClient.ts`):
-- `POST /session` - Create session
-- `POST /session/{id}/message` - Send message
-- `GET /event` - SSE stream
-- `POST /session/{id}/revert` - Revert session
-- `POST /session/{id}/fork` - Fork session
-
-## Database
-
-SQLite via expo-sqlite with migrations. Schema defined in `services/db/database.ts`.
-
-Key tables: `hosts`, `projects`, `session_preferences`, `schema_version`
-
-## Code Style
-
-See `AGENTS.md` for detailed code style guidelines including:
-- TypeScript patterns (interfaces vs types, imports)
-- Component structure and naming conventions
-- Zustand store patterns
-- Error handling patterns
-- Testing patterns
-
-## Visual Testing with MCP
-
-This project uses `mobile-mcp` to enable Claude Code to visually test the app on Android emulators.
-
-### Setup (already configured)
-
-The MCP server is configured in `~/.claude.json` and uses `nix develop` to ensure Node.js 22 is available.
-
-### Usage
-
-1. Start an Android emulator with scaled resolution (required to avoid API image size limits):
-   ```bash
-   emulator -avd <your_avd_name> -scale 0.5
-   ```
-2. Start the dev server: `nix develop --command npx expo start`
-3. Press `a` to launch on Android
-4. Ask Claude to test the app visually
-
-**Note**: The `-scale 0.5` flag is required because Claude's API has a 2000-pixel limit for image dimensions in multi-image requests. Without scaling, high-DPI emulator screenshots will exceed this limit and cause errors.
-
-### Screenshot Storage
-
-When saving screenshots during testing, always save them to the `test_screenshots/` folder in the project root:
-
-```bash
-# Example: Save screenshot to the test_screenshots folder
-mobile_save_screenshot --device "emulator-5554" --saveTo "./test_screenshots/test_screenshot.png"
-```
-
-This folder is gitignored to avoid committing test artifacts.
-
-### Available MCP Commands
-
-- **Screenshots**: "Take a screenshot and describe the UI"
-- **Tap elements**: "Tap the 'Add Host' button"
-- **Text input**: "Type 'localhost:4096' into the server field"
-- **Gestures**: "Swipe down to refresh the list"
-- **Navigation**: "Navigate through all screens and verify the UI"
-
-### Example Test Requests
+## Project layout (new stack)
 
 ```
-"Take a screenshot of the current screen"
-"Test adding a new host - fill in the form and submit"
-"Navigate from hosts to projects to sessions"
-"Verify the chat interface displays messages correctly"
-"Test the settings screen toggles"
+web/src/
+  routes/              TanStack Router file routes:
+                         /hosts, /hosts/add,
+                         /projects/$hostId,
+                         /sessions/$hostId/$projectId (dashboard),
+                         /chat/$hostId/$sessionId?extra=...,
+                         /settings
+  components/
+    ui/                shadcn components (copy/paste, don't edit)
+    chat/              ChatPane, ChatInput, MessageBubble,
+                       PermissionBanner, SessionSidebar,
+                       AddPaneDialog, Markdown
+    NewSessionDialog.tsx
+  stores/              zustand — see web/README.md for the map
+  services/
+    sandboxAgent/      SDK connect + cached IndexedDB persist driver
+    messaging/         event accumulator → Message[]
+    db/                Dexie (hosts, projects, sessionPreferences,
+                       hostModelDefaults)
+    sync/              companion REST client + eventMirror
+    sessions/          sort + filter helpers
+    errors/, util/
+  types/domain.ts      Host, ProjectFolder, SessionPreferences, …
+
+server/src/
+  server.ts            fastify entry
+  db.ts                better-sqlite3 + migrations
+  routes/              sessions, events, projects, health
 ```
 
-## Known Limitations
+## Cross-device model
 
-### Multi-Device Project Sync
+* The sandbox-agent daemon is NOT a session registry — its
+  `SDK.listSessions()` reads the client-side IndexedDB persist driver.
+* **Sessions / aliases / project folders / event history** all sync via
+  the companion server's REST API (see `server/README.md` and
+  `web/src/services/sync/`).
+* **Settings / filter state / host list** stay per-browser by design.
+* A fresh browser connecting to the same daemon + companion sees the
+  same sessions + history as any other browser.
 
-Project configurations (port assignments and folder paths) are stored locally in each device's SQLite database. This can cause conflicts when multiple DroidCode instances connect to the same host:
+## Doc policy
 
-- **Different port assignments**: If two devices create projects for the same folder, each will assign a different port number based on its local state.
-- **Port conflicts**: If one device already has an OpenCode server running on a port, another device trying to spawn a project on that same port will fail.
-- **No automatic sync**: Devices are unaware of each other's project configurations.
+**Keep docs up to date alongside code.** After any non-trivial change:
 
-**Workaround**: Manually ensure devices use matching port assignments when working with the same project folders, or only run projects from one device at a time.
+1. `README.md` (repo root) — if a top-level component or user-facing
+   feature changes.
+2. `web/README.md` — if a store / service / route was added / renamed.
+3. `server/README.md` — if the companion's API or config changed.
+4. `AGENTS.md` — if a new convention, rule, or pitfall is worth
+   recording for future agents.
+5. `migration.md` — if a phase milestone was hit or a decision
+   changed.
+6. `CLAUDE.md` (this file) — if the top-level orientation changes.
 
-**Future improvement**: Sync project configurations across devices via the host server or cloud storage.
+When a single change spans multiple docs, enumerate them in the
+commit body so the coverage is auditable.
 
-## Related Documentation
+**Don't create new *.md files unless explicitly asked.** Prefer updating
+existing ones.
 
-- Android version: `/home/sdelcore/src/droidcode`
-- OpenCode API: https://opencode.ai/docs/server
-- Expo documentation: https://docs.expo.dev
+## Style pointers (see `AGENTS.md` for the full list)
+
+* TypeScript strict, no `any`.
+* 2 spaces, single quotes, no semicolons, trailing commas.
+* `interface` for object shapes, `type` for unions.
+* Don't wrap the `sandbox-agent` SDK — speak to it from stores.
+* Never `?? []` inside a zustand selector — allocate a module-level
+  `EMPTY_FOO` instead.
+* Use `formatError` from `services/errors/` for toast text.
+* Absolute cwd paths only — the daemon doesn't expand `~`.
+* Only use emojis when the user explicitly asks.
+
+## Useful URLs
+
+* Rivet sandbox-agent: <https://github.com/rivet-dev/sandbox-agent>
+* Rivet SDK docs: <https://sandboxagent.dev/docs/sdks/typescript>
+* Migration plan: `./migration.md`
+* Code style: `./AGENTS.md`

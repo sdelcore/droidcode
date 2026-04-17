@@ -246,6 +246,18 @@ Easiest UI screens. Establishes the component patterns for the rest.
 
 **Total estimated effort: 4–6 weeks of focused work, longer with vibe-coding iteration.**
 
+### Interim milestones beyond the phase plan (2026-04-17)
+
+Phases 1–6 landed roughly as drafted. Phase 5 shipped as an MVC (no shiki / virtualization / diff + todo sheets yet). Mid-stride the design expanded based on real use:
+
+* **Dashboard grid** (tiles with inline rename) replaced the session list.
+* **Live tile status** (streaming / needs-input / file + tool counts) via a ref-counted `sessionLiveStore` that background-subscribes per visible session.
+* **Multi-pane chat**: `chatStore` refactored to a session-keyed Map; `/chat/$hostId/$sessionId?extra=sid,sid` supports up to 3 panes on desktop, tabs on mobile. Each pane is a `ChatPane`.
+* **Session sidebar + "New session"** directly from the chat view.
+* **Cross-device sync via `droidcode-server`** (see Decision 6). Sessions / aliases / projects / event history all mirror to a SQLite-backed companion. Old `~/.droidcode.json` experiment deleted.
+
+Phases 7–10 still pending.
+
 ---
 
 ## 6. Validation Strategy
@@ -323,7 +335,7 @@ Every phase from Phase 0 onward should connect to this daemon at least once befo
 3. **Daemon location:** both local and remote daemons supported; each is an entry in the host list. Bundling the daemon inside the desktop app is a future improvement, **not in scope** for this migration.
 4. **iOS:** dropped. Android-only mobile target — no Apple Dev fee, no Xcode build chain.
 5. **Credentials:** docs cover both API key and OAuth on the host. OAuth is the author's daily path; API key is the simple-default doc'd path. Credentials live on the daemon, never in droidcode.
-6. **Cross-device sync:** per-daemon sessions only. Switching device = pointing at the same daemon URL. Sessions live on the daemon (Rivet's persistence model). No separate sync layer in droidcode.
+6. **Cross-device sync:** ~~per-daemon sessions only~~ **REVISED 2026-04-17.** We discovered during Phase 5 that the `sandbox-agent` SDK stores sessions client-side (in its `SessionPersistDriver`), and the daemon doesn't expose a session-list REST endpoint. So "pointing at the same daemon URL" didn't actually share state. We added a companion service (`server/`, `droidcode-server` on port 2469) with SQLite-backed session / event / project tables. Every browser talks to both the daemon (chat) and the companion (shared state + mirrored events). This is a scope expansion from the original plan (which §8 said wouldn't happen); worth it to make multi-device viable. Details in `server/README.md`.
 7. **Hosting:** self-host the static build via Caddy on `nightman` exposed by `tailscale serve`. No Vercel, no Cloudflare, no third-party account.
 
 ---
@@ -334,7 +346,7 @@ Every phase from Phase 0 onward should connect to this daemon at least once befo
 - Doesn't keep the Expo codebase running in parallel after Phase 10 cutover.
 - Doesn't preserve direct OpenCode-server compatibility. If a native OpenCode server needs to be reached, point sandbox-agent at it via its `/opencode` compatibility layer on the host side, not by keeping dual protocol support in the client.
 - Doesn't add new features during migration. Feature parity first, then iterate.
-- Doesn't introduce a server-side component beyond the per-host daemon.
+- ~~Doesn't introduce a server-side component beyond the per-host daemon.~~ **Revised:** does introduce `droidcode-server` (Fastify + SQLite) on port 2469, one per daemon host. See Decision 6.
 - Doesn't target iOS.
 
 ### Future improvements (out of scope for this migration)

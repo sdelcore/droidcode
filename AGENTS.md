@@ -1,178 +1,150 @@
-# Agent Guidelines for DroidCode Expo
+# Agent Guidelines for DroidCode
 
-React Native mobile client for OpenCode. Uses Expo, Zustand, and TypeScript.
+The repo is mid-migration (see `migration.md`). Two stacks live here:
 
-## Commands
+* **New stack** (`web/` + `server/`) — Vite + React 19 + Tailwind v4 +
+  shadcn + TanStack Router, plus a small Node/Fastify companion with
+  SQLite. **All new code goes here.**
+* **Legacy stack** (repo root `app/`, `components/`, `stores/`,
+  `services/`, `types/`) — React Native + Expo. Frozen. Retires in
+  Phase 10.
 
-```bash
-# Development (run in nix develop shell)
-nix develop              # Enter dev shell (required)
-npm start                # Start Expo dev server
-npm run android          # Run on Android emulator
-npm run ios              # Run on iOS simulator
-
-# Testing
-npm test                            # Run all tests
-npm run test:unit                   # Unit tests only
-npm run test:components             # Component tests only
-npm run test:integration            # Integration tests only
-npx jest path/to/file.test.ts       # Single test file
-npx jest --testNamePattern="pattern" # Tests matching pattern
-npm run test:watch                  # Watch mode
-npm run test:coverage               # Coverage report
-
-# Validation (required before commits)
-npm run typecheck        # TypeScript check
-npm run lint             # ESLint
-```
-
-## Project Structure
+## Commands (inside `nix develop`)
 
 ```
-app/              # Expo Router screens (file-based routing)
-components/       # Reusable UI components
-stores/           # Zustand state management
-services/         # Business logic (API, SSE, DB)
-types/            # TypeScript definitions (api.ts, domain.ts, sse.ts)
-constants/        # Theme and configuration
-__tests__/        # Jest tests (unit/, integration/, components/)
+# web
+cd web
+npm run dev              # vite dev, port 5173
+npm run dev -- --host 0.0.0.0   # LAN/tailnet
+npm run build            # prod build (tsc -b && vite build + PWA)
+npm run typecheck        # tsc -b --noEmit (run before commits)
+npm run lint             # eslint
+npm run smoke            # end-to-end SDK test against a live daemon
+
+# server
+cd server
+npm run start            # fastify on :2469
+npm run typecheck
+
+# legacy (still works, don't add features to it)
+npm start                # expo start
+npm run typecheck
+npm run lint
 ```
 
-**Architecture:** UI Components -> Zustand Stores -> Services -> Data (SQLite/API)
+## Project layout (new stack)
 
-## Code Style
+```
+web/src/
+  routes/              # TanStack Router file routes
+  components/
+    ui/                # shadcn — copy/paste; don't edit in place
+    chat/              # ChatPane, ChatInput, MessageBubble,
+                       # PermissionBanner, SessionSidebar, AddPaneDialog
+    NewSessionDialog.tsx
+  stores/              # zustand stores; see web/README.md for map
+  services/
+    sandboxAgent/      # SDK connect + persist driver
+    messaging/         # accumulator
+    sessions/          # sort/filter helpers
+    db/                # Dexie tables
+    sync/              # companion REST client + eventMirror
+    errors/, util/
+  types/domain.ts      # Host, ProjectFolder, SessionPreferences, etc.
+
+server/src/
+  server.ts            # fastify entry
+  db.ts                # better-sqlite3 + migrations
+  routes/              # sessions, events, projects, health
+```
+
+## Architecture rules
+
+* **Stores call services, never raw SDK/DB directly from components.**
+* **Don't wrap the sandbox-agent SDK in another abstraction.** Speak
+  to it directly from stores. The SDK *is* the abstraction. The only
+  exception is `connectToHost` (caches instances + seeds metadata).
+* **Don't add a `?? []` / `?? {}` inside a zustand selector.** It
+  allocates a new reference on each call → re-render loops. Use a
+  module-level `EMPTY_FOO: Foo[] = []` constant.
+* **Don't touch the daemon's filesystem for state sync.** Everything
+  shared across clients goes through the companion REST API
+  (`services/sync/companion.ts`).
+* **Don't throw on missing permissions for stale requests.** SDK's
+  `respondPermission` throws "permission not found" when the id was
+  already consumed — treat that as a no-op, not a surfaced error.
+* **Don't re-introduce the `~`-path shortcut.** The daemon doesn't
+  expand tilde. Absolute paths only; `/projects/$hostId` validates.
+* **Don't emoji in code.** Unicode icons are fine when they're part of
+  the design system (lucide-react).
+
+## Code style (new stack)
 
 ### TypeScript
-- **Strict mode** - no `any` types
-- **Interfaces** for object shapes, **types** for unions/aliases
-- Centralize types in `types/` directory
-- Use `import type` for type-only imports
+* Strict mode. No `any`.
+* `interface` for object shapes, `type` for unions / aliases.
+* `import type` for type-only imports.
+* Types centralize in `web/src/types/`.
 
-```typescript
-interface Props { message: MessageDto; onPress?: () => void }
-type AgentType = 'plan' | 'build' | 'shell'
-```
+### Formatting (Prettier config)
+* 2 spaces. No tabs.
+* Single quotes in JS/TS, double in JSX props.
+* No semicolons.
+* Trailing commas in multiline objects/arrays.
+
+### Naming
+* PascalCase: React components (`MessageBubble.tsx`).
+* camelCase: everything else (`chatStore.ts`, `eventMirror.ts`).
+* `SCREAMING_SNAKE_CASE`: constants.
+* Booleans: `is`/`has`/`can` prefix.
+* Handlers: `handleX`. Props callbacks: `onX`.
 
 ### Imports (4 sections, in order)
-1. React/React Native core
-2. Third-party (Expo, etc.)
-3. Local with `@/` alias
-4. Relative `./` (same directory only)
+1. React / node core
+2. Third-party (sandbox-agent, tanstack, zustand, sonner, lucide, …)
+3. Local `@/…`
+4. Relative `./…` (same directory only)
 
-```typescript
-import { useCallback } from 'react'
-import { View, StyleSheet } from 'react-native'
-import * as Haptics from 'expo-haptics'
-import { Colors } from '@/constants/Theme'
-import type { MessageDto } from '@/types'
-import { MessageBubble } from './MessageBubble'
-```
+### Zustand stores
+* Actions are async and wrap in try/catch.
+* Set `isLoading: true, error: null` at start; update on finish.
+* Use selector hooks in components: `useChatStore((s) => s.byId[id])`.
+* Avoid `?? []` in selectors.
 
-### Formatting
-- **2 spaces** indentation (no tabs)
-- **Single quotes** for strings, double for JSX props
-- **No semicolons**
-- **Trailing commas** in multi-line objects/arrays
+### Errors
+* Use `formatError` for toast text to unwrap AcpHttpError / AcpRpcError.
+* Store errors as `string | null` in state.
 
-### Naming Conventions
-- Files: PascalCase components (`MessageBubble.tsx`), camelCase others (`chatStore.ts`)
-- Variables: camelCase (`messageCount`)
-- Constants: SCREAMING_SNAKE_CASE (`MAX_RETRIES`)
-- Booleans: `is`, `has`, `can` prefix (`isLoading`, `hasContent`)
-- Handlers: `handle` + Action (`handlePress`)
-- Props callbacks: `on` + Action (`onPress`)
+## Testing
 
-### Components
-```typescript
-interface ComponentProps {
-  value: string
-  onPress?: () => void
-}
+* `web/scripts/phase2-smoke.ts` is the current end-to-end proof. Runs
+  via `npm run smoke`. Keep it passing.
+* Legacy Jest tests at `__tests__/` still pass; new stack doesn't yet
+  have a test suite (Phase 11 follow-up).
 
-export function Component({ value, onPress }: ComponentProps) {
-  const handlePress = useCallback(() => onPress?.(), [onPress])
-  
-  return <View style={styles.container}><Text>{value}</Text></View>
-}
+## Docs upkeep
 
-const styles = StyleSheet.create({
-  container: { backgroundColor: Colors.background, padding: Spacing.md },
-})
-```
+**After any non-trivial change** to the new stack, update:
+1. `README.md` (top-level) — if new component or top-level feature.
+2. `web/README.md` — if a store, service, or route was added/renamed.
+3. `server/README.md` — if companion API changed.
+4. `migration.md` — if a phase milestone was hit or a decision changed.
+5. This file — if a new convention / rule / pitfall is worth
+   capturing for future agents.
 
-**Rules:** Functional only, destructure props, `useCallback` for handlers, styles at bottom.
+If a change spans multiple docs, list them in the commit body so
+future-you can verify coverage.
 
-### Zustand Stores
-```typescript
-export const useStore = create<StoreState>()((set, get) => ({
-  items: [],
-  isLoading: false,
-  error: null,
-  
-  loadItems: async () => {
-    set({ isLoading: true, error: null })
-    try {
-      const items = await repository.getAll()
-      set({ items, isLoading: false })
-    } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Unknown error', isLoading: false })
-    }
-  },
-}))
-```
+## Commit style
 
-**Rules:**
-- Stores call services, never direct API/DB
-- All async actions have try-catch
-- Set `isLoading` and clear `error` at action start
-- Use selectors in components: `useChatStore((s) => s.messages)`
+Follow the existing history (`git log --oneline`). Subject: `feat:` /
+`fix:` / `refactor:` + concise summary. Body explains *why*, not
+*what*. Multi-commit features allowed; prefer logical separation over
+one mega-commit.
 
-### Error Handling
-```typescript
-import { extractNetworkError, logNetworkError } from '@/services/errors/networkError'
+## Visual testing
 
-try {
-  await apiClient.post('/endpoint', data)
-} catch (error) {
-  const errorInfo = extractNetworkError(error)
-  logNetworkError('Context', error, errorInfo)
-  // errorInfo.userMessage for UI, errorInfo.isRetryable for retry logic
-}
-```
-
-- Store errors as `string | null`
-- Use `ErrorBanner` component for UI display
-
-### Testing
-```typescript
-jest.mock('@/services/db', () => ({
-  repository: { getAll: jest.fn(), insert: jest.fn() },
-}))
-
-beforeEach(() => {
-  useStore.setState({ items: [], isLoading: false, error: null })
-  jest.clearAllMocks()
-})
-
-describe('store', () => {
-  it('should load items', async () => {
-    mockRepository.getAll.mockResolvedValue([{ id: 1 }])
-    await useStore.getState().loadItems()
-    expect(useStore.getState().items).toHaveLength(1)
-  })
-})
-```
-
-**Patterns:** AAA (Arrange, Act, Assert), mock dependencies, reset state in beforeEach.
-
-## Theme Usage
-```typescript
-import { Colors, Spacing, BorderRadius, FontSize } from '@/constants/Theme'
-```
-
-## Important Notes
-
-- Always run commands in `nix develop` shell
-- Run `npm run typecheck` before committing
-- No `console.log` - use logger from `services/debug`
-- Follow OpenCode API spec: https://opencode.ai/docs/server
+Not currently wired up for the Vite stack. For mobile testing, run
+the dev server with `--host 0.0.0.0` and point the phone at
+`http://<hostname>:5173`. Also restart the sandbox-agent daemon with
+extra CORS origins for the phone's hostname / LAN IP.
