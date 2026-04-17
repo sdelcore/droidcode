@@ -125,6 +125,15 @@ server/src/
 5. `migration.md` — if a phase milestone was hit or a decision
    changed.
 6. `CLAUDE.md` (this file) — if the top-level orientation changes.
+7. `docs/SDK_LIMITATIONS.md` — **any time you work around a sandbox-agent
+   SDK or Rivet daemon limitation**. If you add a `catch` to swallow an
+   expected SDK error, cast around a wrong type, introduce a client
+   mirror / cache / companion endpoint because a primitive is missing,
+   rewrite an event payload because the raw stream is unusable, or
+   validate input client-side because the daemon error is garbage —
+   append a row to that table. See its "When to update this file"
+   section for the exact triggers. Don't delete rows when upstream
+   ships a fix; strike them through and note the SDK version.
 
 When a single change spans multiple docs, enumerate them in the
 commit body so the coverage is auditable.

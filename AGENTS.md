@@ -131,6 +131,19 @@ server/src/
 4. `migration.md` — if a phase milestone was hit or a decision changed.
 5. This file — if a new convention / rule / pitfall is worth
    capturing for future agents.
+6. `docs/SDK_LIMITATIONS.md` — **any time you paper over a sandbox-agent
+   or Rivet daemon quirk**. Append a row. Triggers:
+   * `catch` that swallows an expected SDK error that isn't actually a
+     failure (e.g. `permission 'X' not found`)
+   * `as any` / `as unknown` because the SDK type is wrong at runtime
+   * new client-side mirror, cache, or companion endpoint because the
+     SDK / daemon doesn't expose a primitive we need
+   * stripping / rewriting an event payload because the raw stream is
+     unusable as-is (e.g. replay-prefix filter)
+   * fallback for a missing browser API that only bites in our flow
+     (e.g. `crypto.randomUUID` on insecure origins)
+   * client-side input validation because the daemon's error for that
+     input is unhelpful (`~` paths)
 
 If a change spans multiple docs, list them in the commit body so
 future-you can verify coverage.
