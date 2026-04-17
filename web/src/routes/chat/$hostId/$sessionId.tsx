@@ -82,17 +82,22 @@ function ChatScreen() {
     }
   }, [numericHostId])
 
-  const backTarget = useMemo(() => {
+  const primaryCwd = useMemo(() => {
     const primary = sessions?.find((s) => s.id === sessionId)
-    const cwd = (primary?.sessionInit as { cwd?: string } | undefined)?.cwd
-    const project = cwd ? projectsForHost.find((p) => p.directory === cwd) : undefined
+    return (primary?.sessionInit as { cwd?: string } | undefined)?.cwd
+  }, [sessions, sessionId])
+
+  const backTarget = useMemo(() => {
+    const project = primaryCwd
+      ? projectsForHost.find((p) => p.directory === primaryCwd)
+      : undefined
     const params: Record<string, string> = { hostId: String(numericHostId) }
     if (project) {
       params.projectId = String(project.id)
       return { to: '/sessions/$hostId/$projectId', params }
     }
     return { to: '/projects/$hostId', params }
-  }, [sessions, sessionId, projectsForHost, numericHostId])
+  }, [primaryCwd, projectsForHost, numericHostId])
 
   useEffect(() => {
     // If the primary pane changes (route navigation), reset active tab to it.
@@ -186,6 +191,7 @@ function ChatScreen() {
       panes={panes}
       primarySessionId={sessionId}
       extraPanes={extraPanes}
+      defaultCwd={primaryCwd}
       onOpenPrimary={openAsPrimary}
       onAddPane={addExtraPane}
       onRemovePane={closePane}

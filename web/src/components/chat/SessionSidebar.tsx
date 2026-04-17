@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { FilePlus2, Plus, X } from 'lucide-react'
 import type { SessionRecord } from 'sandbox-agent'
+import { NewSessionDialog } from '@/components/NewSessionDialog'
 import { useSessionStore } from '@/stores'
 import { useLiveStatus, useSessionLiveStore } from '@/stores/sessionLiveStore'
 import {
@@ -20,6 +21,8 @@ interface SessionSidebarProps {
   panes: string[]
   primarySessionId: string
   extraPanes: string[]
+  // Default cwd for the New-session dialog; comes from the primary pane.
+  defaultCwd?: string
   onOpenPrimary(sessionId: string): void
   onAddPane(sessionId: string): void
   onRemovePane(sessionId: string): void
@@ -32,6 +35,7 @@ export function SessionSidebar({
   panes,
   primarySessionId,
   extraPanes,
+  defaultCwd,
   onOpenPrimary,
   onAddPane,
   onRemovePane,
@@ -43,6 +47,7 @@ export function SessionSidebar({
 
   const [prefs, setPrefs] = useState<Record<string, SessionPreferences>>({})
   const [query, setQuery] = useState('')
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
 
   useEffect(() => {
     loadForHost(hostId)
@@ -84,6 +89,26 @@ export function SessionSidebar({
 
   return (
     <aside className="flex h-full w-full flex-col gap-2 border-r border-border bg-muted/30 p-2 sm:w-64">
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-8 justify-start gap-2"
+        onClick={() => setNewSessionOpen(true)}
+        disabled={!defaultCwd}
+        title={defaultCwd ? 'Start a new session in ' + defaultCwd : 'Open a session first to set cwd'}
+      >
+        <FilePlus2 className="size-3.5" />
+        New session
+      </Button>
+      {defaultCwd && (
+        <NewSessionDialog
+          hostId={hostId}
+          cwd={defaultCwd}
+          open={newSessionOpen}
+          onOpenChange={setNewSessionOpen}
+          onCreated={(sessionId) => onOpenPrimary(sessionId)}
+        />
+      )}
       <Input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
