@@ -6,7 +6,8 @@ import {
   useParams,
   useSearch,
 } from '@tanstack/react-router'
-import { Pin } from 'lucide-react'
+import { Pin, Plus } from 'lucide-react'
+import { AddPaneDialog } from '@/components/chat/AddPaneDialog'
 import { ChatPane } from '@/components/chat/ChatPane'
 import { Button } from '@/components/ui/button'
 import { useHostStore } from '@/stores'
@@ -53,11 +54,24 @@ function ChatScreen() {
   }, [])
 
   const [activeTab, setActiveTab] = useState<string>(sessionId)
+  const [addPaneOpen, setAddPaneOpen] = useState(false)
 
   useEffect(() => {
     // If the primary pane changes (route navigation), reset active tab to it.
     setActiveTab(sessionId)
   }, [sessionId])
+
+  function addExtraPane(extraSessionId: string) {
+    if (panes.includes(extraSessionId)) return
+    if (panes.length >= MAX_PANES_DESKTOP) return
+    const nextExtras = [...extraPanes, extraSessionId].join(',')
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: { hostId: String(numericHostId), sessionId },
+      search: { extra: nextExtras },
+    })
+    setActiveTab(extraSessionId)
+  }
 
   function closeExtra(extraId: string) {
     const next = extraPanes.filter((id) => id !== extraId).join(',') || undefined
@@ -105,6 +119,14 @@ function ChatScreen() {
         hostId={numericHostId}
         paneCount={panes.length}
         canPin={panes.length < MAX_PANES_DESKTOP}
+        onAddPane={() => setAddPaneOpen(true)}
+      />
+      <AddPaneDialog
+        hostId={numericHostId}
+        excludeSessionIds={panes}
+        open={addPaneOpen}
+        onOpenChange={setAddPaneOpen}
+        onSelect={addExtraPane}
       />
       {isNarrow && panes.length > 1 ? (
         <>
@@ -150,11 +172,13 @@ function TopBar({
   hostName,
   paneCount,
   canPin,
+  onAddPane,
 }: {
   hostName: string
   hostId: number
   paneCount: number
   canPin: boolean
+  onAddPane(): void
 }) {
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
@@ -171,15 +195,27 @@ function TopBar({
           {paneCount} {paneCount === 1 ? 'pane' : 'panes'}
         </span>
       </div>
-      <nav className="flex items-center gap-3 text-xs text-muted-foreground">
-        {!canPin && <span className="text-[11px]">(max panes open)</span>}
-        <Link to="/hosts" className="hover:text-foreground">
-          Hosts
-        </Link>
-        <Link to="/settings" className="hover:text-foreground">
-          Settings
-        </Link>
-      </nav>
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 gap-1 px-2"
+          onClick={onAddPane}
+          disabled={!canPin}
+          title={canPin ? 'Open another session in a pane' : 'Max panes open'}
+        >
+          <Plus className="size-3.5" />
+          Add pane
+        </Button>
+        <nav className="flex items-center gap-3">
+          <Link to="/hosts" className="hover:text-foreground">
+            Hosts
+          </Link>
+          <Link to="/settings" className="hover:text-foreground">
+            Settings
+          </Link>
+        </nav>
+      </div>
     </div>
   )
 }
