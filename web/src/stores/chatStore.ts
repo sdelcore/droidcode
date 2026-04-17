@@ -2,6 +2,12 @@ import { create } from 'zustand'
 import type { Session, SessionEvent, SessionPermissionRequest, PermissionReply } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
 import { MessageAccumulator } from '@/services/messaging'
+import { listEvents as companionListEvents, type CompanionEvent } from '@/services/sync/companion'
+import {
+  attachEventMirror,
+  detachEventMirror,
+  enqueueEvent,
+} from '@/services/sync/eventMirror'
 import { requireHost } from './hostStore'
 import { useSettingsStore } from './settingsStore'
 import type { Message } from '@/types'
@@ -41,10 +47,23 @@ interface ChatStoreState {
 }
 
 interface Attachment {
+  hostId: number
   session: Session
   unsubscribeEvents: () => void
   unsubscribePermissions: () => void
   accumulator: MessageAccumulator
+}
+
+function companionEventToSdkEvent(e: CompanionEvent): SessionEvent {
+  return {
+    id: e.id,
+    eventIndex: e.eventIndex,
+    sessionId: e.sessionId,
+    createdAt: e.createdAt,
+    connectionId: e.connectionId ?? '',
+    sender: e.sender,
+    payload: e.payload as SessionEvent['payload'],
+  }
 }
 
 // Non-serializable per-session runtime state — kept out of Zustand state.
@@ -60,6 +79,7 @@ function detach(sessionId: string): void {
   if (!a) return
   a.unsubscribeEvents()
   a.unsubscribePermissions()
+  detachEventMirror(a.hostId, sessionId)
   attachments.delete(sessionId)
 }
 
@@ -114,20 +134,35 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       const accumulator = new MessageAccumulator()
       const seenEventIds = new Set<string>()
 
-      try {
-        const history = await sdk.getEvents({ sessionId, limit: 500 })
-        for (const event of history.items) {
-          accumulator.push(event)
-          seenEventIds.add(event.id)
-        }
-      } catch {
-        // History fetch is best-effort.
+      // Collect history from both sides: SDK's local persist (might have
+      // stuff the companion doesn't yet) + companion server (authoritative
+      // cross-device view). Dedupe by id and replay in eventIndex order
+      // so tool calls and text chunks interleave correctly.
+      const [localHistory, remoteHistory] = await Promise.all([
+        sdk.getEvents({ sessionId, limit: 1000 }).catch(() => ({ items: [] as SessionEvent[] })),
+        companionListEvents(host, sessionId, { limit: 2000 })
+          .then((items) => items.map(companionEventToSdkEvent))
+          .catch(() => [] as SessionEvent[]),
+      ])
+      const merged: SessionEvent[] = []
+      for (const e of [...localHistory.items, ...remoteHistory]) {
+        if (seenEventIds.has(e.id)) continue
+        seenEventIds.add(e.id)
+        merged.push(e)
       }
+      merged.sort((a, b) => a.eventIndex - b.eventIndex)
+      for (const e of merged) accumulator.push(e)
+
+      attachEventMirror(host, sessionId)
+      // Backfill: push any history events the companion didn't already
+      // have so the other browsers eventually see them too.
+      for (const e of merged) enqueueEvent(host.id, sessionId, e)
 
       const handleEvent = (event: SessionEvent) => {
         if (seenEventIds.has(event.id)) return
         seenEventIds.add(event.id)
         accumulator.push(event)
+        enqueueEvent(host.id, sessionId, event)
         set((state) => patch(state, sessionId, { messages: [...accumulator.messages] }))
       }
       const handlePermission = (req: SessionPermissionRequest) => {
@@ -151,6 +186,7 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       const unsubscribePermissions = session.onPermissionRequest(handlePermission)
 
       attachments.set(sessionId, {
+        hostId,
         session,
         unsubscribeEvents,
         unsubscribePermissions,
