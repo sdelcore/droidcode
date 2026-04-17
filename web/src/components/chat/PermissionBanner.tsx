@@ -4,10 +4,11 @@ import { useChatStore } from '@/stores'
 import { Button } from '@/components/ui/button'
 
 interface PermissionBannerProps {
+  sessionId: string
   request: SessionPermissionRequest
 }
 
-export function PermissionBanner({ request }: PermissionBannerProps) {
+export function PermissionBanner({ sessionId, request }: PermissionBannerProps) {
   const respond = useChatStore((s) => s.respondPermission)
 
   const replies = useMemo(() => {
@@ -28,7 +29,7 @@ export function PermissionBanner({ request }: PermissionBannerProps) {
               key={reply}
               size="sm"
               variant={reply === 'reject' ? 'ghost' : 'default'}
-              onClick={() => respond(request.id, reply)}
+              onClick={() => respond(sessionId, request.id, reply)}
             >
               {replyLabel(reply)}
             </Button>

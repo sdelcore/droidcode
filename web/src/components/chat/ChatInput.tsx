@@ -8,6 +8,7 @@ import { randomId } from '@/services/util/id'
 const MAX_IMAGES = 5
 
 interface ChatInputProps {
+  sessionId: string
   value: string
   onChange(value: string): void
   disabled?: boolean
@@ -19,11 +20,11 @@ interface ImageAttachment {
   mimeType: string
 }
 
-export function ChatInput({ value, onChange, disabled }: ChatInputProps) {
+export function ChatInput({ sessionId, value, onChange, disabled }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [images, setImages] = useState<ImageAttachment[]>([])
-  const isStreaming = useChatStore((s) => s.isStreaming)
+  const isStreaming = useChatStore((s) => s.byId[sessionId]?.isStreaming ?? false)
   const sendPrompt = useChatStore((s) => s.sendPrompt)
   const interrupt = useChatStore((s) => s.interrupt)
   const runClientSlashCommand = useChatStore((s) => s.runClientSlashCommand)
@@ -59,7 +60,7 @@ export function ChatInput({ value, onChange, disabled }: ChatInputProps) {
     if (!trimmed && images.length === 0) return
     if (trimmed.startsWith('/')) {
       const name = trimmed.slice(1).split(/\s+/, 1)[0]
-      const result = runClientSlashCommand(name)
+      const result = runClientSlashCommand(sessionId, name)
       if (result.message) {
         if (result.handled) toast.success(result.message)
         else toast.info(result.message)
@@ -73,11 +74,11 @@ export function ChatInput({ value, onChange, disabled }: ChatInputProps) {
     const imagesCopy = [...images]
     setImages([])
     try {
-      await sendPrompt(trimmed, imagesCopy.length > 0 ? imagesCopy : undefined)
+      await sendPrompt(sessionId, trimmed, imagesCopy.length > 0 ? imagesCopy : undefined)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Send failed')
     }
-  }, [value, onChange, images, sendPrompt, runClientSlashCommand])
+  }, [sessionId, value, onChange, images, sendPrompt, runClientSlashCommand])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -161,7 +162,12 @@ export function ChatInput({ value, onChange, disabled }: ChatInputProps) {
           className="min-h-9 flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm disabled:opacity-50"
         />
         {isStreaming ? (
-          <Button size="icon" variant="destructive" onClick={interrupt} aria-label="Interrupt">
+          <Button
+            size="icon"
+            variant="destructive"
+            onClick={() => interrupt(sessionId)}
+            aria-label="Interrupt"
+          >
             <Square className="size-4" />
           </Button>
         ) : (

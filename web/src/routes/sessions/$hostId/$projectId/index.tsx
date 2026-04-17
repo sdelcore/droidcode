@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, createFileRoute, useNavigate, useParams } from '@tanstack/react-router'
 import { toast } from 'sonner'
-import { CheckSquare2, FilePen, Hammer, HelpCircle, MoreHorizontal, Square, Trash2 } from 'lucide-react'
+import {
+  CheckSquare2,
+  Columns3,
+  FilePen,
+  Hammer,
+  HelpCircle,
+  MoreHorizontal,
+  Square,
+  Trash2,
+} from 'lucide-react'
 import type { SessionRecord } from 'sandbox-agent'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
 import { useLiveStatus, useSessionLiveStore } from '@/stores/sessionLiveStore'
@@ -175,6 +184,21 @@ function SessionDashboard() {
     })
   }
 
+  function openSelectedInPanels() {
+    if (selected.size === 0) return
+    // Order by currently-sorted order so the primary is the first visible one.
+    const selectedOrdered = filteredAndSorted
+      .map((s) => s.id)
+      .filter((id) => selected.has(id))
+    if (selectedOrdered.length === 0) return
+    const [primary, ...rest] = selectedOrdered
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: { hostId: String(numericHostId), sessionId: primary },
+      search: rest.length > 0 ? { extra: rest.join(',') } : {},
+    })
+  }
+
   if (!host) {
     return (
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:p-6">
@@ -245,7 +269,7 @@ function SessionDashboard() {
 
       <Separator />
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <Button
           size="sm"
           variant="ghost"
@@ -255,15 +279,27 @@ function SessionDashboard() {
           {allVisibleSelected ? <CheckSquare2 className="size-4" /> : <Square className="size-4" />}
           {selected.size === 0 ? 'Select all' : `${selected.size} selected`}
         </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          disabled={selected.size === 0}
-          onClick={handleBulkDelete}
-        >
-          <Trash2 className="size-4" />
-          Delete
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={selected.size === 0}
+            onClick={openSelectedInPanels}
+            title="Open selected sessions side-by-side"
+          >
+            <Columns3 className="size-4" />
+            Open {selected.size > 0 ? selected.size : ''}
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={selected.size === 0}
+            onClick={handleBulkDelete}
+          >
+            <Trash2 className="size-4" />
+            Delete
+          </Button>
+        </div>
       </div>
 
       {sessionsError && (

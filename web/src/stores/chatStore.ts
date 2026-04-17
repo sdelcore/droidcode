@@ -6,23 +6,38 @@ import { requireHost } from './hostStore'
 import { useSettingsStore } from './settingsStore'
 import type { Message } from '@/types'
 
-type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error'
+export type ChatStatus = 'idle' | 'connecting' | 'connected' | 'error'
 
-interface ChatStoreState {
-  hostId: number | null
-  sessionId: string | null
-  status: ConnectionStatus
+export interface ChatPaneState {
+  hostId: number
+  sessionId: string
+  status: ChatStatus
   error: string | null
   messages: Message[]
   pendingPermission: SessionPermissionRequest | null
   isStreaming: boolean
+}
+
+interface ChatStoreState {
+  byId: Record<string, ChatPaneState>
 
   openSession(hostId: number, sessionId: string): Promise<void>
-  closeSession(): void
-  sendPrompt(text: string, images?: Array<{ dataUrl: string; mimeType: string }>): Promise<void>
-  interrupt(): Promise<void>
-  respondPermission(requestId: string, reply: PermissionReply): Promise<void>
-  runClientSlashCommand(name: string): { handled: boolean; message?: string }
+  closeSession(sessionId: string): void
+  sendPrompt(
+    sessionId: string,
+    text: string,
+    images?: Array<{ dataUrl: string; mimeType: string }>,
+  ): Promise<void>
+  interrupt(sessionId: string): Promise<void>
+  respondPermission(
+    sessionId: string,
+    requestId: string,
+    reply: PermissionReply,
+  ): Promise<void>
+  runClientSlashCommand(
+    sessionId: string,
+    name: string,
+  ): { handled: boolean; message?: string }
 }
 
 interface Attachment {
@@ -32,40 +47,64 @@ interface Attachment {
   accumulator: MessageAccumulator
 }
 
-let attached: Attachment | null = null
+// Non-serializable per-session runtime state — kept out of Zustand state.
+const attachments = new Map<string, Attachment>()
 
 function isPermissionNotFound(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return /permission .*not found/i.test(error.message)
 }
 
-function detach(): void {
-  if (!attached) return
-  attached.unsubscribeEvents()
-  attached.unsubscribePermissions()
-  attached = null
+function detach(sessionId: string): void {
+  const a = attachments.get(sessionId)
+  if (!a) return
+  a.unsubscribeEvents()
+  a.unsubscribePermissions()
+  attachments.delete(sessionId)
+}
+
+function initialState(hostId: number, sessionId: string): ChatPaneState {
+  return {
+    hostId,
+    sessionId,
+    status: 'connecting',
+    error: null,
+    messages: [],
+    pendingPermission: null,
+    isStreaming: false,
+  }
+}
+
+function patch(
+  state: ChatStoreState,
+  sessionId: string,
+  updates: Partial<ChatPaneState>,
+): ChatStoreState {
+  const current = state.byId[sessionId]
+  if (!current) return state
+  return {
+    ...state,
+    byId: { ...state.byId, [sessionId]: { ...current, ...updates } },
+  }
 }
 
 export const useChatStore = create<ChatStoreState>()((set, get) => ({
-  hostId: null,
-  sessionId: null,
-  status: 'idle',
-  error: null,
-  messages: [],
-  pendingPermission: null,
-  isStreaming: false,
+  byId: {},
 
   async openSession(hostId, sessionId) {
-    detach()
-    set({
-      hostId,
-      sessionId,
-      status: 'connecting',
-      error: null,
-      messages: [],
-      pendingPermission: null,
-      isStreaming: false,
-    })
+    // Idempotent: if already attached, just ensure state is present.
+    if (attachments.has(sessionId)) {
+      if (!get().byId[sessionId]) {
+        set((state) => ({
+          byId: { ...state.byId, [sessionId]: { ...initialState(hostId, sessionId), status: 'connected' } },
+        }))
+      }
+      return
+    }
+
+    set((state) => ({
+      byId: { ...state.byId, [sessionId]: initialState(hostId, sessionId) },
+    }))
 
     try {
       const host = await requireHost(hostId)
@@ -75,9 +114,6 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       const accumulator = new MessageAccumulator()
       const seenEventIds = new Set<string>()
 
-      // Replay history before subscribing so the bubble list reflects the
-      // full conversation the moment we connect. Events that also arrive
-      // through onEvent are deduped by id.
       try {
         const history = await sdk.getEvents({ sessionId, limit: 500 })
         for (const event of history.items) {
@@ -85,77 +121,72 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
           seenEventIds.add(event.id)
         }
       } catch {
-        // History fetch is best-effort; live events are enough to be useful.
+        // History fetch is best-effort.
       }
 
       const handleEvent = (event: SessionEvent) => {
         if (seenEventIds.has(event.id)) return
         seenEventIds.add(event.id)
         accumulator.push(event)
-        set({ messages: [...accumulator.messages] })
+        set((state) => patch(state, sessionId, { messages: [...accumulator.messages] }))
       }
       const handlePermission = (req: SessionPermissionRequest) => {
         const autoAccept = useSettingsStore.getState().autoAcceptPermissions
         if (autoAccept) {
-          // Prefer "always" so the agent stops asking for the same tool type;
-          // fall back to "once" or "reject" if the daemon didn't offer it.
           const preferred: PermissionReply[] = ['always', 'once', 'reject']
           const reply = preferred.find((r) => req.availableReplies.includes(r))
           if (reply && reply !== 'reject') {
             session.respondPermission(req.id, reply).catch((err) => {
-              // If the permission was already resolved (double-fire on
-              // resume/replay), there's nothing to do — don't surface it.
               if (isPermissionNotFound(err)) return
               console.error('auto-accept permission failed', err)
-              set({ pendingPermission: req })
+              set((state) => patch(state, sessionId, { pendingPermission: req }))
             })
             return
           }
         }
-        set({ pendingPermission: req })
+        set((state) => patch(state, sessionId, { pendingPermission: req }))
       }
 
       const unsubscribeEvents = session.onEvent(handleEvent)
       const unsubscribePermissions = session.onPermissionRequest(handlePermission)
 
-      attached = {
+      attachments.set(sessionId, {
         session,
         unsubscribeEvents,
         unsubscribePermissions,
         accumulator,
-      }
+      })
 
-      set({
-        status: 'connected',
-        messages: [...accumulator.messages],
-      })
+      set((state) =>
+        patch(state, sessionId, {
+          status: 'connected',
+          messages: [...accumulator.messages],
+        }),
+      )
     } catch (error) {
-      detach()
-      set({
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Failed to open session',
-      })
+      detach(sessionId)
+      set((state) =>
+        patch(state, sessionId, {
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Failed to open session',
+        }),
+      )
     }
   },
 
-  closeSession() {
-    detach()
-    set({
-      hostId: null,
-      sessionId: null,
-      status: 'idle',
-      messages: [],
-      pendingPermission: null,
-      isStreaming: false,
+  closeSession(sessionId) {
+    detach(sessionId)
+    set((state) => {
+      const { [sessionId]: _removed, ...rest } = state.byId
+      void _removed
+      return { byId: rest }
     })
   },
 
-  async sendPrompt(text, images) {
-    if (!attached) throw new Error('No active session')
-    // The user message gets added when the daemon echoes back the
-    // session/prompt event through onEvent — same path as on resume —
-    // so both live chat and history share one source of truth.
-    set({ isStreaming: true, error: null })
+  async sendPrompt(sessionId, text, images) {
+    const a = attachments.get(sessionId)
+    if (!a) throw new Error('No active session')
+    set((state) => patch(state, sessionId, { isStreaming: true, error: null }))
     try {
       const contentBlocks: Array<{ type: string; [key: string]: unknown }> = []
       if (images?.length) {
@@ -165,54 +196,69 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
         }
       }
       contentBlocks.push({ type: 'text', text })
-      await attached.session.prompt(contentBlocks as Array<{ type: 'text'; text: string }>)
+      await a.session.prompt(contentBlocks as Array<{ type: 'text'; text: string }>)
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Prompt failed',
-      })
+      set((state) =>
+        patch(state, sessionId, {
+          error: error instanceof Error ? error.message : 'Prompt failed',
+        }),
+      )
     } finally {
-      set({ isStreaming: false })
+      set((state) => patch(state, sessionId, { isStreaming: false }))
     }
   },
 
-  async interrupt() {
-    if (!attached) return
+  async interrupt(sessionId) {
+    const a = attachments.get(sessionId)
+    if (!a) return
     try {
-      await attached.session.rawSend('session/cancel', {})
+      await a.session.rawSend('session/cancel', {})
     } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Interrupt failed',
-      })
+      set((state) =>
+        patch(state, sessionId, {
+          error: error instanceof Error ? error.message : 'Interrupt failed',
+        }),
+      )
     }
   },
 
-  async respondPermission(requestId, reply) {
-    if (!attached) return
+  async respondPermission(sessionId, requestId, reply) {
+    const a = attachments.get(sessionId)
+    if (!a) return
     try {
-      await attached.session.respondPermission(requestId, reply)
-      if (get().pendingPermission?.id === requestId) {
-        set({ pendingPermission: null })
-      }
+      await a.session.respondPermission(requestId, reply)
+      set((state) => {
+        const current = state.byId[sessionId]
+        if (current?.pendingPermission?.id === requestId) {
+          return patch(state, sessionId, { pendingPermission: null })
+        }
+        return state
+      })
     } catch (error) {
       if (isPermissionNotFound(error)) {
-        // Stale permission (already resolved upstream). Clear the banner
-        // quietly instead of showing a scary red error.
-        if (get().pendingPermission?.id === requestId) {
-          set({ pendingPermission: null })
-        }
+        set((state) => {
+          const current = state.byId[sessionId]
+          if (current?.pendingPermission?.id === requestId) {
+            return patch(state, sessionId, { pendingPermission: null })
+          }
+          return state
+        })
         return
       }
-      set({
-        error: error instanceof Error ? error.message : 'Permission reply failed',
-      })
+      set((state) =>
+        patch(state, sessionId, {
+          error: error instanceof Error ? error.message : 'Permission reply failed',
+        }),
+      )
     }
   },
 
-  runClientSlashCommand(name) {
+  runClientSlashCommand(sessionId, name) {
+    const a = attachments.get(sessionId)
     switch (name) {
       case 'clear':
-        if (attached) attached.accumulator.reset()
-        set({ messages: [] })
+        if (a) a.accumulator.reset()
+        set((state) => patch(state, sessionId, { messages: [] }))
         return { handled: true, message: 'Message display cleared.' }
       case 'compact':
         return {
@@ -230,3 +276,8 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
     }
   },
 }))
+
+// Convenience selector hooks for the common case of "just give me this pane".
+export function useChatPane(sessionId: string | undefined): ChatPaneState | undefined {
+  return useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined))
+}
