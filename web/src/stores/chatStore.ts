@@ -9,6 +9,7 @@ import {
   enqueueEvent,
 } from '@/services/sync/eventMirror'
 import { requireHost } from './hostStore'
+import { useSessionLiveStore } from './sessionLiveStore'
 import { useSettingsStore } from './settingsStore'
 import type { Message } from '@/types'
 
@@ -171,11 +172,19 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
           const preferred: PermissionReply[] = ['always', 'once', 'reject']
           const reply = preferred.find((r) => req.availableReplies.includes(r))
           if (reply && reply !== 'reject') {
-            session.respondPermission(req.id, reply).catch((err) => {
-              if (isPermissionNotFound(err)) return
-              console.error('auto-accept permission failed', err)
-              set((state) => patch(state, sessionId, { pendingPermission: req }))
-            })
+            session.respondPermission(req.id, reply).then(
+              () => {
+                useSessionLiveStore.getState().clearPendingPermission(sessionId)
+              },
+              (err) => {
+                if (isPermissionNotFound(err)) {
+                  useSessionLiveStore.getState().clearPendingPermission(sessionId)
+                  return
+                }
+                console.error('auto-accept permission failed', err)
+                set((state) => patch(state, sessionId, { pendingPermission: req }))
+              },
+            )
             return
           }
         }
@@ -261,8 +270,7 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
   async respondPermission(sessionId, requestId, reply) {
     const a = attachments.get(sessionId)
     if (!a) return
-    try {
-      await a.session.respondPermission(requestId, reply)
+    const clearBanner = () => {
       set((state) => {
         const current = state.byId[sessionId]
         if (current?.pendingPermission?.id === requestId) {
@@ -270,15 +278,14 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
         }
         return state
       })
+      useSessionLiveStore.getState().clearPendingPermission(sessionId)
+    }
+    try {
+      await a.session.respondPermission(requestId, reply)
+      clearBanner()
     } catch (error) {
       if (isPermissionNotFound(error)) {
-        set((state) => {
-          const current = state.byId[sessionId]
-          if (current?.pendingPermission?.id === requestId) {
-            return patch(state, sessionId, { pendingPermission: null })
-          }
-          return state
-        })
+        clearBanner()
         return
       }
       set((state) =>

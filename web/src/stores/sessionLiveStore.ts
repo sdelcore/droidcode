@@ -1,7 +1,13 @@
 import { create } from 'zustand'
-import type { Session, SessionEvent, SessionPermissionRequest } from 'sandbox-agent'
+import type {
+  PermissionReply,
+  Session,
+  SessionEvent,
+  SessionPermissionRequest,
+} from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
 import { requireHost } from './hostStore'
+import { useSettingsStore } from './settingsStore'
 
 export interface LiveSessionStatus {
   sessionId: string
@@ -24,6 +30,12 @@ interface SessionLiveStoreState {
   statuses: Record<string, LiveSessionStatus>
   watch(hostId: number, sessionId: string): Promise<void>
   unwatch(hostId: number, sessionId: string): void
+  clearPendingPermission(sessionId: string): void
+}
+
+function isPermissionNotFound(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return /permission .*not found/i.test(error.message)
 }
 
 const FILE_EDIT_TOOLS = new Set([
@@ -147,6 +159,34 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
       }
 
       const applyPermission = (req: SessionPermissionRequest) => {
+        const autoAccept = useSettingsStore.getState().autoAcceptPermissions
+        if (autoAccept) {
+          // Auto-accept here too (not just in chatStore), so sessions that
+          // the user has never opened still get permission requests
+          // resolved. Otherwise the "?" badge would hang forever on any
+          // session that fires a permission before the user opens its
+          // chat pane. Race with chatStore is safe — duplicate responses
+          // throw "permission not found" which we swallow (SDK #8/#9).
+          const preferred: PermissionReply[] = ['always', 'once', 'reject']
+          const reply = preferred.find((r) => req.availableReplies.includes(r))
+          if (reply && reply !== 'reject') {
+            entry.session.respondPermission(req.id, reply).then(
+              () => {
+                get().clearPendingPermission(sessionId)
+              },
+              (err) => {
+                if (isPermissionNotFound(err)) {
+                  get().clearPendingPermission(sessionId)
+                  return
+                }
+                // Fall through: leave the badge so the user notices.
+                console.error('live auto-accept permission failed', err)
+              },
+            )
+            // Don't flip the badge on when we're about to resolve it ourselves.
+            return
+          }
+        }
         set((state) => {
           const current = state.statuses[sessionId]
           if (!current) return state
@@ -198,6 +238,19 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
       // renders something sensible.
       entries.delete(k)
     }
+  },
+
+  clearPendingPermission(sessionId) {
+    set((state) => {
+      const current = state.statuses[sessionId]
+      if (!current || !current.pendingPermission) return state
+      return {
+        statuses: {
+          ...state.statuses,
+          [sessionId]: { ...current, pendingPermission: false },
+        },
+      }
+    })
   },
 
   unwatch(hostId, sessionId) {
