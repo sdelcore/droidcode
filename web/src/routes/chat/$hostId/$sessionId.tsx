@@ -17,9 +17,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import { projectRepository } from '@/services/db'
+import {
+  paneKey,
+  parseExtraPanes,
+  serializeExtraPanes,
+  type PaneRef,
+} from '@/services/sessions/panes'
 import { useHostStore, useSessionStore } from '@/stores'
-import type { ProjectFolder } from '@/types'
 
 interface ChatSearch {
   extra?: string
@@ -39,18 +43,29 @@ function ChatScreen() {
   const search = useSearch({ from: '/chat/$hostId/$sessionId' })
   const navigate = useNavigate()
   const numericHostId = Number(hostId)
-  const host = useHostStore((s) => s.hosts.find((h) => h.id === numericHostId))
+  const hosts = useHostStore((s) => s.hosts)
+  const host = hosts.find((h) => h.id === numericHostId)
 
-  const extraPanes = useMemo(() => {
-    if (!search.extra) return []
-    return search.extra
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0 && s !== sessionId)
-      .slice(0, MAX_PANES_DESKTOP - 1)
-  }, [search.extra, sessionId])
+  const primaryRef: PaneRef = useMemo(
+    () => ({ hostId: numericHostId, sessionId }),
+    [numericHostId, sessionId],
+  )
 
-  const panes = useMemo(() => [sessionId, ...extraPanes], [sessionId, extraPanes])
+  const extraPanes = useMemo(
+    () => parseExtraPanes(search.extra, primaryRef, MAX_PANES_DESKTOP - 1),
+    [search.extra, primaryRef],
+  )
+
+  const panes = useMemo<PaneRef[]>(
+    () => [primaryRef, ...extraPanes],
+    [primaryRef, extraPanes],
+  )
+
+  const hostsSpanned = useMemo(() => {
+    const set = new Set<number>()
+    for (const p of panes) set.add(p.hostId)
+    return set
+  }, [panes])
 
   const [isNarrow, setIsNarrow] = useState(() =>
     typeof window === 'undefined' ? false : window.innerWidth < 768,
@@ -62,116 +77,70 @@ function ChatScreen() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const [activeTab, setActiveTab] = useState<string>(sessionId)
+  const [activeTab, setActiveTab] = useState<string>(paneKey(primaryRef))
   const [addPaneOpen, setAddPaneOpen] = useState(false)
   const [sidebarOpenMobile, setSidebarOpenMobile] = useState(false)
   const [sidebarCollapsedDesktop, setSidebarCollapsedDesktop] = useState(false)
-  const [projectsForHost, setProjectsForHost] = useState<ProjectFolder[]>([])
 
   const sessions = useSessionStore((s) => s.byHost[numericHostId])
-
-  // Derive which dashboard the "Back" button should link to, by matching
-  // the primary pane's cwd against known remembered project folders.
-  useEffect(() => {
-    let cancelled = false
-    projectRepository.getByHost(numericHostId).then((rows) => {
-      if (!cancelled) setProjectsForHost(rows)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [numericHostId])
 
   const primaryCwd = useMemo(() => {
     const primary = sessions?.find((s) => s.id === sessionId)
     return (primary?.sessionInit as { cwd?: string } | undefined)?.cwd
   }, [sessions, sessionId])
 
-  const backTarget = useMemo(() => {
-    const project = primaryCwd
-      ? projectsForHost.find((p) => p.directory === primaryCwd)
-      : undefined
-    const params: Record<string, string> = { hostId: String(numericHostId) }
-    if (project) {
-      params.projectId = String(project.id)
-      return { to: '/sessions/$hostId/$projectId', params }
-    }
-    return { to: '/projects/$hostId', params }
-  }, [primaryCwd, projectsForHost, numericHostId])
-
   useEffect(() => {
-    // If the primary pane changes (route navigation), reset active tab to it.
-    setActiveTab(sessionId)
-  }, [sessionId])
+    setActiveTab(paneKey(primaryRef))
+  }, [primaryRef])
 
-  function addExtraPane(extraSessionId: string) {
-    if (panes.includes(extraSessionId)) return
+  function navigateToPanes(nextPrimary: PaneRef, nextExtras: PaneRef[]) {
+    const extra = serializeExtraPanes(nextExtras)
+    navigate({
+      to: '/chat/$hostId/$sessionId',
+      params: {
+        hostId: String(nextPrimary.hostId),
+        sessionId: nextPrimary.sessionId,
+      },
+      search: extra ? { extra } : {},
+    })
+  }
+
+  function addExtraPane(ref: PaneRef) {
+    if (panes.some((p) => p.hostId === ref.hostId && p.sessionId === ref.sessionId)) {
+      return
+    }
     if (panes.length >= MAX_PANES_DESKTOP) return
-    const nextExtras = [...extraPanes, extraSessionId].join(',')
-    navigate({
-      to: '/chat/$hostId/$sessionId',
-      params: { hostId: String(numericHostId), sessionId },
-      search: { extra: nextExtras },
-    })
-    setActiveTab(extraSessionId)
+    navigateToPanes(primaryRef, [...extraPanes, ref])
+    setActiveTab(paneKey(ref))
   }
 
-  function openAsPrimary(newPrimary: string) {
-    if (newPrimary === sessionId && extraPanes.length === 0) return
-    // Plain switch: drop all extras and make this the only open session.
-    // Use the sidebar "+" to explicitly add panes.
-    navigate({
-      to: '/chat/$hostId/$sessionId',
-      params: { hostId: String(numericHostId), sessionId: newPrimary },
-      search: {},
-    })
+  function openAsPrimary(ref: PaneRef) {
+    if (ref.hostId === primaryRef.hostId && ref.sessionId === primaryRef.sessionId) {
+      if (extraPanes.length === 0) return
+    }
+    // Plain switch: drop all extras and make this the only open pane.
+    navigateToPanes(ref, [])
   }
 
-  function closeExtra(extraId: string) {
-    const next = extraPanes.filter((id) => id !== extraId).join(',') || undefined
-    navigate({
-      to: '/chat/$hostId/$sessionId',
-      params: { hostId: String(numericHostId), sessionId },
-      search: next ? { extra: next } : {},
-    })
-  }
-
-  function closePane(paneId: string) {
-    // Closing the primary pane: promote the first extra, or fall back to hosts.
-    if (paneId === sessionId) {
-      const nextPrimary = extraPanes[0]
+  function closePane(key: string) {
+    const isPrimary = key === paneKey(primaryRef)
+    if (isPrimary) {
+      const [nextPrimary, ...rest] = extraPanes
       if (nextPrimary) {
-        const rest = extraPanes.slice(1).join(',') || undefined
-        navigate({
-          to: '/chat/$hostId/$sessionId',
-          params: { hostId: String(numericHostId), sessionId: nextPrimary },
-          search: rest ? { extra: rest } : {},
-        })
+        navigateToPanes(nextPrimary, rest)
         return
       }
-      navigate({ to: '/hosts' })
+      navigate({ to: '/' })
       return
     }
-    closeExtra(paneId)
+    const nextExtras = extraPanes.filter((p) => paneKey(p) !== key)
+    navigateToPanes(primaryRef, nextExtras)
   }
 
-  function onAfterDelete(deletedId: string) {
-    if (deletedId === sessionId) {
-      // Primary pane deleted — promote the next extra or return to hosts.
-      const nextPrimary = extraPanes[0]
-      if (nextPrimary) {
-        const rest = extraPanes.slice(1).join(',') || undefined
-        navigate({
-          to: '/chat/$hostId/$sessionId',
-          params: { hostId: String(numericHostId), sessionId: nextPrimary },
-          search: rest ? { extra: rest } : {},
-        })
-        return
-      }
-      navigate({ to: '/hosts' })
-      return
-    }
-    closeExtra(deletedId)
+  function onAfterDelete(deletedKey: string) {
+    // Deletion of a session: treat same as close. Any still-visible panes
+    // reflect the deletion on their own through their store updates.
+    closePane(deletedKey)
   }
 
   if (!host) {
@@ -179,22 +148,33 @@ function ChatScreen() {
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:p-6">
         <p className="text-sm text-muted-foreground">Host not found.</p>
         <Button asChild size="sm" variant="outline">
-          <Link to="/hosts">Back to hosts</Link>
+          <Link to="/">Back to home</Link>
         </Button>
       </main>
     )
   }
 
+  // Sidebar shows sessions on the primary pane's host only. Cross-host
+  // panes still render correctly — the sidebar just can't pin/unpin them.
+  const sameHostPaneIds = panes
+    .filter((p) => p.hostId === numericHostId)
+    .map((p) => p.sessionId)
+  const sameHostExtraIds = extraPanes
+    .filter((p) => p.hostId === numericHostId)
+    .map((p) => p.sessionId)
+
   const sidebarNode = (
     <SessionSidebar
       hostId={numericHostId}
-      panes={panes}
+      panes={sameHostPaneIds}
       primarySessionId={sessionId}
-      extraPanes={extraPanes}
+      extraPanes={sameHostExtraIds}
       defaultCwd={primaryCwd}
-      onOpenPrimary={openAsPrimary}
-      onAddPane={addExtraPane}
-      onRemovePane={closePane}
+      onOpenPrimary={(sid) => openAsPrimary({ hostId: numericHostId, sessionId: sid })}
+      onAddPane={(sid) => addExtraPane({ hostId: numericHostId, sessionId: sid })}
+      onRemovePane={(sid) =>
+        closePane(paneKey({ hostId: numericHostId, sessionId: sid }))
+      }
     />
   )
 
@@ -202,21 +182,20 @@ function ChatScreen() {
     <div className="flex min-h-0 flex-1 flex-col">
       <TopBar
         hostName={host.name}
-        hostId={numericHostId}
         paneCount={panes.length}
+        crossHost={hostsSpanned.size > 1}
         canPin={panes.length < MAX_PANES_DESKTOP}
         onAddPane={() => setAddPaneOpen(true)}
-        backTo={backTarget}
         sidebarCollapsed={sidebarCollapsedDesktop}
         onToggleSidebar={() => setSidebarCollapsedDesktop((v) => !v)}
         onOpenMobileSidebar={() => setSidebarOpenMobile(true)}
       />
       <AddPaneDialog
         hostId={numericHostId}
-        excludeSessionIds={panes}
+        excludeSessionIds={sameHostPaneIds}
         open={addPaneOpen}
         onOpenChange={setAddPaneOpen}
-        onSelect={addExtraPane}
+        onSelect={(sid) => addExtraPane({ hostId: numericHostId, sessionId: sid })}
       />
 
       <Sheet open={sidebarOpenMobile} onOpenChange={setSidebarOpenMobile}>
@@ -237,77 +216,85 @@ function ChatScreen() {
         {!isNarrow && !sidebarCollapsedDesktop && (
           <div className="hidden w-64 shrink-0 md:flex">{sidebarNode}</div>
         )}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {renderPanes()}
-        </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">{renderPanes()}</div>
       </div>
     </div>
   )
 
   function renderPanes() {
     return isNarrow && panes.length > 1 ? (
-        <>
-          <TabBar
-            panes={panes}
-            activeTab={activeTab}
-            onSelect={setActiveTab}
-            onClose={closePane}
-          />
-          <div className="flex min-h-0 flex-1 flex-col">
-            {panes.map((id) => (
-              <div key={id} className={id === activeTab ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      <>
+        <TabBar
+          panes={panes}
+          hosts={hosts}
+          activeKey={activeTab}
+          onSelect={setActiveTab}
+          onClose={closePane}
+        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {panes.map((p) => {
+            const key = paneKey(p)
+            return (
+              <div
+                key={key}
+                className={key === activeTab ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+              >
                 <ChatPane
-                  hostId={numericHostId}
-                  sessionId={id}
-                  isActive={id === activeTab}
-                  onClose={panes.length > 1 ? () => closePane(id) : undefined}
-                  onAfterDelete={() => onAfterDelete(id)}
+                  hostId={p.hostId}
+                  sessionId={p.sessionId}
+                  isActive={key === activeTab}
+                  onClose={panes.length > 1 ? () => closePane(key) : undefined}
+                  onAfterDelete={() => onAfterDelete(key)}
                 />
               </div>
-            ))}
-          </div>
-        </>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-row overflow-x-auto">
-          {panes.map((id) => (
-            <ChatPane
-              key={id}
-              hostId={numericHostId}
-              sessionId={id}
-              isActive={id === sessionId}
-              onClose={panes.length > 1 ? () => closePane(id) : undefined}
-              onAfterDelete={() => onAfterDelete(id)}
-            />
-          ))}
+            )
+          })}
         </div>
-      )
+      </>
+    ) : (
+      <div className="flex min-h-0 flex-1 flex-row overflow-x-auto">
+        {panes.map((p) => {
+          const key = paneKey(p)
+          return (
+            <ChatPane
+              key={key}
+              hostId={p.hostId}
+              sessionId={p.sessionId}
+              isActive={key === paneKey(primaryRef)}
+              onClose={panes.length > 1 ? () => closePane(key) : undefined}
+              onAfterDelete={() => onAfterDelete(key)}
+            />
+          )
+        })}
+      </div>
+    )
   }
+}
+
+interface TopBarProps {
+  hostName: string
+  paneCount: number
+  crossHost: boolean
+  canPin: boolean
+  onAddPane(): void
+  sidebarCollapsed: boolean
+  onToggleSidebar(): void
+  onOpenMobileSidebar(): void
 }
 
 function TopBar({
   hostName,
   paneCount,
+  crossHost,
   canPin,
   onAddPane,
-  backTo,
   sidebarCollapsed,
   onToggleSidebar,
   onOpenMobileSidebar,
-}: {
-  hostName: string
-  hostId: number
-  paneCount: number
-  canPin: boolean
-  onAddPane(): void
-  backTo: { to: string; params?: Record<string, string> }
-  sidebarCollapsed: boolean
-  onToggleSidebar(): void
-  onOpenMobileSidebar(): void
-}) {
+}: TopBarProps) {
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-border bg-background/95 px-3 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        {/* Mobile: open sidebar sheet */}
         <Button
           size="icon"
           variant="ghost"
@@ -317,7 +304,6 @@ function TopBar({
         >
           <PanelLeft className="size-4" />
         </Button>
-        {/* Desktop: collapse sidebar column */}
         <Button
           size="icon"
           variant="ghost"
@@ -330,19 +316,24 @@ function TopBar({
         </Button>
 
         <Link
-          to={backTo.to}
-          params={backTo.params}
+          to="/"
           className="flex items-center gap-1 rounded-md px-2 py-1 text-foreground hover:bg-muted"
-          title="Back to session grid"
+          title="Back to sessions"
         >
           <ArrowLeft className="size-3.5" />
           <span className="hidden sm:inline">Back</span>
         </Link>
 
         <span className="opacity-50">·</span>
-        <Link to="/hosts" className="hover:text-foreground">
-          {hostName}
-        </Link>
+        <span>{hostName}</span>
+        {crossHost && (
+          <span
+            className="rounded-full border border-amber-500/40 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400"
+            title="Panes span multiple hosts"
+          >
+            multi-host
+          </span>
+        )}
         <span className="opacity-50">·</span>
         <span>
           {paneCount} {paneCount === 1 ? 'pane' : 'panes'}
@@ -361,8 +352,8 @@ function TopBar({
           <span className="hidden sm:inline">Add pane</span>
         </Button>
         <nav className="hidden items-center gap-3 sm:flex">
-          <Link to="/hosts" className="hover:text-foreground">
-            Hosts
+          <Link to="/" className="hover:text-foreground">
+            Home
           </Link>
           <Link to="/settings" className="hover:text-foreground">
             Settings
@@ -373,46 +364,50 @@ function TopBar({
   )
 }
 
-function TabBar({
-  panes,
-  activeTab,
-  onSelect,
-  onClose,
-}: {
-  panes: string[]
-  activeTab: string
-  onSelect(id: string): void
-  onClose(id: string): void
-}) {
+interface TabBarProps {
+  panes: PaneRef[]
+  hosts: ReturnType<typeof useHostStore.getState>['hosts']
+  activeKey: string
+  onSelect(key: string): void
+  onClose(key: string): void
+}
+
+function TabBar({ panes, hosts, activeKey, onSelect, onClose }: TabBarProps) {
+  const multiHost = new Set(panes.map((p) => p.hostId)).size > 1
   return (
     <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-muted/30 p-1">
-      {panes.map((id) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => onSelect(id)}
-          className={
-            'flex items-center gap-1 rounded-md px-2.5 py-1 font-mono text-xs ' +
-            (id === activeTab
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground')
-          }
-        >
-          <Pin className="size-3" />
-          <span>{id.slice(0, 8)}</span>
-          <span
-            role="button"
-            tabIndex={-1}
-            className="ml-1 rounded px-1 text-muted-foreground hover:bg-muted"
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose(id)
-            }}
+      {panes.map((p) => {
+        const key = paneKey(p)
+        const host = hosts.find((h) => h.id === p.hostId)
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onSelect(key)}
+            className={
+              'flex items-center gap-1 rounded-md px-2.5 py-1 font-mono text-xs ' +
+              (key === activeKey
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground')
+            }
           >
-            ×
-          </span>
-        </button>
-      ))}
+            <Pin className="size-3" />
+            {multiHost && host && <span className="opacity-70">{host.name}·</span>}
+            <span>{p.sessionId.slice(0, 8)}</span>
+            <span
+              role="button"
+              tabIndex={-1}
+              className="ml-1 rounded px-1 text-muted-foreground hover:bg-muted"
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose(key)
+              }}
+            >
+              ×
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }

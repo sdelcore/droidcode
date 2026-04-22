@@ -176,7 +176,9 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
       params: { hostId: String(primary.hostId), sessionId: primary.session.id },
       search:
         rest.length > 0
-          ? { extra: rest.map((r) => r.session.id).join(',') }
+          ? {
+              extra: rest.map((r) => `${r.hostId}:${r.session.id}`).join(','),
+            }
           : {},
     })
   }
