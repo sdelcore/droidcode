@@ -78,6 +78,7 @@ export async function isCompanionReachable(host: Host): Promise<boolean> {
 
 export interface CompanionMeta {
   hostname: string
+  home: string
   daemon: {
     enabled: boolean
     port: number

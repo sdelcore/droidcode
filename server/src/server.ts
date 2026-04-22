@@ -1,7 +1,6 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
-import { hostname } from 'node:os'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { resolve } from 'node:path'
 import { openDatabase } from './db.ts'
 import { registerSessionRoutes } from './routes/sessions.ts'
@@ -83,6 +82,7 @@ async function main() {
   app.get('/v1/health', async () => ({ status: 'ok' }))
   app.get('/v1/meta', async () => ({
     hostname: osHostname,
+    home: homedir(),
     daemon: {
       enabled: daemonEnabled,
       port: daemonPort,

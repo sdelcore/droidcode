@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, ChevronRight, FolderSearch, Plus, Server } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  FolderOpen,
+  FolderSearch,
+  Plus,
+  Server,
+} from 'lucide-react'
 import type { AgentInfo } from 'sandbox-agent'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,12 +20,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { FolderBrowser } from '@/components/FolderBrowser'
 import { useConfigStore, useHostStore, useSessionStore } from '@/stores'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { projectRepository, sessionPreferencesRepository } from '@/services/db'
 import { fetchHealth, hostBaseUrl } from '@/services/sandboxAgent/client'
 import { formatError } from '@/services/errors/formatError'
-import type { ProjectFolder } from '@/types'
+import { sessionCwd } from '@/services/sessions/sortAndFilter'
+import type { ProjectFolder, SessionPreferences } from '@/types'
 
 interface NewSessionDialogProps {
   open: boolean
@@ -29,6 +38,51 @@ interface NewSessionDialogProps {
 }
 
 const EMPTY_AGENTS: AgentInfo[] = []
+
+function folderBasename(path: string): string {
+  return path.replace(/\/+$/, '').split('/').pop() || 'session'
+}
+
+function suggestAlias(path: string): string {
+  // Shown in the placeholder so the user sees what the default will be
+  // if they leave the alias blank. The real uniqueness check happens at
+  // submit time in computeDefaultAlias.
+  return folderBasename(path.trim())
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function computeDefaultAlias(hostId: number, folderPath: string): Promise<string> {
+  const basename = folderBasename(folderPath)
+  const [prefs, sessions] = [
+    await sessionPreferencesRepository.getByHost(hostId),
+    useSessionStore.getState().byHost[hostId] ?? [],
+  ]
+  const sessionIdsInFolder = new Set(
+    sessions.filter((s) => sessionCwd(s) === folderPath).map((s) => s.id),
+  )
+  const used = new Set<string>(
+    prefs
+      .filter(
+        (p: SessionPreferences) =>
+          p.alias && p.alias.length > 0 && sessionIdsInFolder.has(p.sessionId),
+      )
+      .map((p) => p.alias as string),
+  )
+  if (!used.has(basename)) return basename
+  const pattern = new RegExp(`^${escapeRegex(basename)}-(\\d+)$`)
+  let maxN = 1
+  for (const a of used) {
+    const m = pattern.exec(a)
+    if (m) {
+      const n = Number.parseInt(m[1], 10)
+      if (Number.isFinite(n) && n > maxN) maxN = n
+    }
+  }
+  return `${basename}-${maxN + 1}`
+}
 
 export function NewSessionDialog(props: NewSessionDialogProps) {
   const isNarrow = useIsNarrow()
@@ -95,6 +149,7 @@ function NewSessionForm({
   const [rememberedFolders, setRememberedFolders] = useState<ProjectFolder[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [mode, setMode] = useState<'form' | 'addHost'>('form')
+  const [browseOpen, setBrowseOpen] = useState(false)
 
   // Reset when the modal opens, so previous session state doesn't leak in.
   useEffect(() => {
@@ -176,18 +231,18 @@ function NewSessionForm({
       })
       const record = await createSession(hostId, { agent: selectedAgent, cwd })
       const trimmedAlias = alias.trim()
-      if (trimmedAlias) {
-        await sessionPreferencesRepository.save({
-          sessionId: record.id,
-          hostId,
-          agent: selectedAgent,
-          alias: trimmedAlias,
-        })
-        useMetadataStore.getState().upsertSession(hostId, {
-          id: record.id,
-          alias: trimmedAlias,
-        })
-      }
+      const finalAlias =
+        trimmedAlias.length > 0 ? trimmedAlias : await computeDefaultAlias(hostId, cwd)
+      await sessionPreferencesRepository.save({
+        sessionId: record.id,
+        hostId,
+        agent: selectedAgent,
+        alias: finalAlias,
+      })
+      useMetadataStore.getState().upsertSession(hostId, {
+        id: record.id,
+        alias: finalAlias,
+      })
       onCreated(hostId, record.id)
       onOpenChange(false)
     } catch (err) {
@@ -236,24 +291,38 @@ function NewSessionForm({
         error={folderError ?? undefined}
         hint={
           rememberedFolders.length > 0
-            ? `Saved folders: ${rememberedFolders.length}`
-            : 'Absolute path on the host (e.g. /home/you/src/project)'
+            ? `Saved folders: ${rememberedFolders.length}. Browse to pick any directory on the host.`
+            : 'Absolute path on the host. Browse to pick interactively.'
         }
       >
-        <Input
-          value={folder}
-          onChange={(e) => {
-            setFolder(e.target.value)
-            if (folderError) setFolderError(null)
-          }}
-          onBlur={() => setFolderError(validateFolder(folder))}
-          placeholder="/home/you/src/project"
-          list="remembered-folders"
-          className="h-11 text-base sm:h-9 sm:text-sm"
-          inputMode="url"
-          autoCapitalize="off"
-          autoCorrect="off"
-        />
+        <div className="flex gap-2">
+          <Input
+            value={folder}
+            onChange={(e) => {
+              setFolder(e.target.value)
+              if (folderError) setFolderError(null)
+            }}
+            onBlur={() => setFolderError(validateFolder(folder))}
+            placeholder="/home/you/src/project"
+            list="remembered-folders"
+            className="h-11 text-base sm:h-9 sm:text-sm"
+            inputMode="url"
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setBrowseOpen(true)}
+            disabled={hostId === null}
+            className="h-11 shrink-0 sm:h-9"
+            aria-label="Browse folders"
+            title="Browse folders on the host"
+          >
+            <FolderOpen className="size-4" />
+            <span className="hidden sm:inline">Browse</span>
+          </Button>
+        </div>
         <datalist id="remembered-folders">
           {rememberedFolders.map((p) => (
             <option key={p.id} value={p.directory}>
@@ -263,14 +332,36 @@ function NewSessionForm({
         </datalist>
       </Field>
 
-      <Field label="Alias (optional)">
+      <Field
+        label="Alias (optional)"
+        hint={
+          folder.trim().length > 0 && !validateFolder(folder)
+            ? `Defaults to "${suggestAlias(folder)}" if left blank`
+            : undefined
+        }
+      >
         <Input
           value={alias}
           onChange={(e) => setAlias(e.target.value)}
-          placeholder="e.g. Phase 7 plan"
+          placeholder={
+            folder.trim().length > 0 && !validateFolder(folder)
+              ? suggestAlias(folder)
+              : 'e.g. Phase 7 plan'
+          }
           className="h-11 text-base sm:h-9 sm:text-sm"
         />
       </Field>
+
+      <FolderBrowser
+        host={selectedHost ?? null}
+        open={browseOpen}
+        onOpenChange={setBrowseOpen}
+        initialPath={folder.trim().startsWith('/') ? folder.trim() : undefined}
+        onSelect={(p) => {
+          setFolder(p)
+          setFolderError(null)
+        }}
+      />
 
       {installed.length > 1 && (
         <Field label="Agent">
