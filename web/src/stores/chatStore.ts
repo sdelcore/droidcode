@@ -49,10 +49,14 @@ interface ChatStoreState {
 
 interface Attachment {
   hostId: number
+  sessionId: string
   session: Session
   unsubscribeEvents: () => void
   unsubscribePermissions: () => void
   accumulator: MessageAccumulator
+  seenEventIds: Set<string>
+  lastEventIndex: number
+  catchUpInFlight: boolean
 }
 
 function companionEventToSdkEvent(e: CompanionEvent): SessionEvent {
@@ -69,6 +73,58 @@ function companionEventToSdkEvent(e: CompanionEvent): SessionEvent {
 
 // Non-serializable per-session runtime state — kept out of Zustand state.
 const attachments = new Map<string, Attachment>()
+
+// Defensive catch-up: the SDK's SSE connection can go silently stale on
+// mobile (backgrounded tab, sleep, network switch) and we don't get a
+// failure event — we just stop receiving updates. When the window comes
+// back to focus or the browser reports online, ask the companion for
+// everything after our last seen eventIndex and push any gaps through
+// the same handleEvent path. Dedupe is by event id so double-pushes
+// from SSE + poll are safe.
+async function catchUpAttachment(a: Attachment): Promise<void> {
+  if (a.catchUpInFlight) return
+  a.catchUpInFlight = true
+  try {
+    const host = await requireHost(a.hostId).catch(() => null)
+    if (!host) return
+    const items = await companionListEvents(host, a.sessionId, {
+      after: a.lastEventIndex,
+      limit: 1000,
+    }).catch(() => [] as CompanionEvent[])
+    if (items.length === 0) return
+    const events = items.map(companionEventToSdkEvent)
+    events.sort((x, y) => x.eventIndex - y.eventIndex)
+    let appended = false
+    for (const e of events) {
+      if (a.seenEventIds.has(e.id)) continue
+      a.seenEventIds.add(e.id)
+      if (e.eventIndex > a.lastEventIndex) a.lastEventIndex = e.eventIndex
+      a.accumulator.push(e)
+      appended = true
+    }
+    if (appended) {
+      useChatStore.setState((state) =>
+        patch(state, a.sessionId, { messages: [...a.accumulator.messages] }),
+      )
+    }
+  } finally {
+    a.catchUpInFlight = false
+  }
+}
+
+function catchUpAll(): void {
+  for (const a of attachments.values()) void catchUpAttachment(a)
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') catchUpAll()
+  })
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => catchUpAll())
+  window.addEventListener('focus', () => catchUpAll())
+}
 
 function isPermissionNotFound(error: unknown): boolean {
   if (!(error instanceof Error)) return false
@@ -134,6 +190,7 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
 
       const accumulator = new MessageAccumulator()
       const seenEventIds = new Set<string>()
+      let lastEventIndex = 0
 
       // Collect history from both sides: SDK's local persist (might have
       // stuff the companion doesn't yet) + companion server (authoritative
@@ -152,7 +209,10 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
         merged.push(e)
       }
       merged.sort((a, b) => a.eventIndex - b.eventIndex)
-      for (const e of merged) accumulator.push(e)
+      for (const e of merged) {
+        accumulator.push(e)
+        if (e.eventIndex > lastEventIndex) lastEventIndex = e.eventIndex
+      }
 
       attachEventMirror(host, sessionId)
       // Backfill: push any history events the companion didn't already
@@ -162,6 +222,9 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       const handleEvent = (event: SessionEvent) => {
         if (seenEventIds.has(event.id)) return
         seenEventIds.add(event.id)
+        if (event.eventIndex > lastEventIndex) lastEventIndex = event.eventIndex
+        const a = attachments.get(sessionId)
+        if (a) a.lastEventIndex = lastEventIndex
         accumulator.push(event)
         enqueueEvent(host.id, sessionId, event)
         set((state) => patch(state, sessionId, { messages: [...accumulator.messages] }))
@@ -196,10 +259,14 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
 
       attachments.set(sessionId, {
         hostId,
+        sessionId,
         session,
         unsubscribeEvents,
         unsubscribePermissions,
         accumulator,
+        seenEventIds,
+        lastEventIndex,
+        catchUpInFlight: false,
       })
 
       set((state) =>
