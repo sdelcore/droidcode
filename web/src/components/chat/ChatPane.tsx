@@ -35,7 +35,6 @@ export function ChatPane({
 }: ChatPaneProps) {
   const host = useHostStore((s) => s.hosts.find((h) => h.id === hostId))
   const openSession = useChatStore((s) => s.openSession)
-  const closeSession = useChatStore((s) => s.closeSession)
   const pane = useChatStore((s) => s.byId[sessionId])
   const destroySession = useSessionStore((s) => s.destroySession)
   const setActiveSession = useVisibilityStore((s) => s.setActiveSession)
@@ -52,10 +51,16 @@ export function ChatPane({
 
   useEffect(() => {
     openSession(hostId, sessionId)
-    return () => {
-      closeSession(sessionId)
-    }
-  }, [hostId, sessionId, openSession, closeSession])
+    // Intentionally NO unmount cleanup: detaching here would tear down the
+    // SSE subscription + accumulator on every remount (StrictMode double-
+    // mount, narrow/wide layout swap, nav away + back), and Rivet's
+    // `resumeSession` re-fires `session/new` each time (SDK limitation #6).
+    // That turned into a reconnect storm that re-primed the agent with the
+    // replay-prefix prompt 5+ times for one session and scrambled context.
+    // Attachments are now app-scoped: they live in useChatStore until the
+    // session is explicitly destroyed (sessionStore.destroySession calls
+    // closeSession).
+  }, [hostId, sessionId, openSession])
 
   useEffect(() => {
     if (!isActive) return

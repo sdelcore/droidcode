@@ -94,6 +94,14 @@ server/src/
   are `hostId:sessionId,…`. Use `services/sessions/panes.ts`'s parse /
   serialize / paneKey helpers — don't hand-roll encoding. Bare
   sessionIds are accepted for legacy URLs only.
+* **Chat attachments are app-scoped, not component-scoped.** Do NOT
+  call `chatStore.closeSession` from a React `useEffect` cleanup in
+  `ChatPane`. Every unmount (StrictMode, layout swap, nav away + back)
+  would detach → next mount calls `sdk.resumeSession` → SDK fires a
+  new `session/new` + replay-prefix prompt (SDK limitation #6). Five
+  of those stacks make the agent forget what's going on. Detach only
+  on explicit session destroy (`sessionStore.destroySession` handles
+  this) or future explicit disconnect flows.
 * **Don't emoji in code.** Unicode icons are fine when they're part of
   the design system (lucide-react).
 

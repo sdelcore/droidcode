@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import type { SessionCreateRequest, SessionRecord } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
 import { requireHost, useHostStore, waitForHosts } from './hostStore'
+import { useChatStore } from './chatStore'
 import { useMetadataStore } from './metadataStore'
 import { idbStorage } from './idbStorage'
 import {
@@ -118,6 +119,10 @@ export const useSessionStore = create<SessionStoreState>()(
         const host = await requireHost(hostId)
         const sdk = await connectToHost(host)
         await sdk.destroySession(sessionId)
+        // Chat attachments are app-scoped (see ChatPane). Destroying the
+        // session is the authoritative signal to tear one down; otherwise
+        // the SSE subscription and event mirror would leak.
+        useChatStore.getState().closeSession(sessionId)
         const list = get().byHost[hostId] ?? []
         set({
           byHost: {
