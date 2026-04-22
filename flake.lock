@@ -111,11 +111,11 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1776887902,
-        "narHash": "sha256-+bFeXoq6Q+gqBgOyxaCRrMKSrC3sgoKCRH9dlnfrzn0=",
+        "lastModified": 1776871044,
+        "narHash": "sha256-2Hdq9JYtuM4Vqrj9+MVjHFg8FKzTjdU3JEB5i28BB4o=",
         "owner": "sdelcore",
         "repo": "wagent",
-        "rev": "94d11f9e860b1ca4aa9eb8606b4552399b752317",
+        "rev": "fdb414a698a33669fc36c6b26fc62e6ef4d7585e",
         "type": "github"
       },
       "original": {
