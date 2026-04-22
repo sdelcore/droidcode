@@ -1,13 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import {
-  Check,
-  ChevronRight,
-  FolderOpen,
-  FolderSearch,
-  Plus,
-  Server,
-} from 'lucide-react'
+import { Check, ChevronRight, FolderSearch, Plus, Server } from 'lucide-react'
 import type { AgentInfo } from 'sandbox-agent'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,11 +13,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { FolderBrowser } from '@/components/FolderBrowser'
+import { FolderCombobox } from '@/components/FolderCombobox'
 import { useConfigStore, useHostStore, useSessionStore } from '@/stores'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { projectRepository, sessionPreferencesRepository } from '@/services/db'
 import { fetchHealth, hostBaseUrl } from '@/services/sandboxAgent/client'
+import {
+  companionBaseUrl,
+  fetchBootstrapMeta,
+} from '@/services/sync/companion'
 import { formatError } from '@/services/errors/formatError'
 import { sessionCwd } from '@/services/sessions/sortAndFilter'
 import type { ProjectFolder, SessionPreferences } from '@/types'
@@ -149,7 +146,9 @@ function NewSessionForm({
   const [rememberedFolders, setRememberedFolders] = useState<ProjectFolder[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [mode, setMode] = useState<'form' | 'addHost'>('form')
-  const [browseOpen, setBrowseOpen] = useState(false)
+  // Cache of host → home dir resolved via /v1/meta, so switching hosts is
+  // instantaneous after the first look-up.
+  const homeByHost = useRef<Map<number, string>>(new Map())
 
   // Reset when the modal opens, so previous session state doesn't leak in.
   useEffect(() => {
@@ -182,6 +181,33 @@ function NewSessionForm({
       cancelled = true
     }
   }, [hostId])
+
+  // Auto-fill folder with the selected host's home dir. Skips when the
+  // user already has a value (typed or initialCwd from the caller).
+  useEffect(() => {
+    if (!open) return
+    if (hostId === null) return
+    if (folder.trim().length > 0) return
+    const host = hosts.find((h) => h.id === hostId)
+    if (!host) return
+    const cached = homeByHost.current.get(hostId)
+    if (cached) {
+      setFolder(cached)
+      return
+    }
+    let cancelled = false
+    fetchBootstrapMeta(companionBaseUrl(host)).then((meta) => {
+      if (cancelled) return
+      const home = meta?.home
+      if (!home) return
+      homeByHost.current.set(hostId, home)
+      // Only apply if the user hasn't typed in the meantime.
+      setFolder((prev) => (prev.trim().length > 0 ? prev : home))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, hostId, hosts, folder])
 
   const agents = useConfigStore((s) =>
     hostId !== null ? (s.agentsByHost[hostId] ?? EMPTY_AGENTS) : EMPTY_AGENTS,
@@ -289,47 +315,18 @@ function NewSessionForm({
         label="Folder"
         icon={<FolderSearch className="size-4 text-muted-foreground" />}
         error={folderError ?? undefined}
-        hint={
-          rememberedFolders.length > 0
-            ? `Saved folders: ${rememberedFolders.length}. Browse to pick any directory on the host.`
-            : 'Absolute path on the host. Browse to pick interactively.'
-        }
+        hint="Tap to browse subfolders on the host. Back goes up one level."
       >
-        <div className="flex gap-2">
-          <Input
-            value={folder}
-            onChange={(e) => {
-              setFolder(e.target.value)
-              if (folderError) setFolderError(null)
-            }}
-            onBlur={() => setFolderError(validateFolder(folder))}
-            placeholder="/home/you/src/project"
-            list="remembered-folders"
-            className="h-11 text-base sm:h-9 sm:text-sm"
-            inputMode="url"
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setBrowseOpen(true)}
-            disabled={hostId === null}
-            className="h-11 shrink-0 sm:h-9"
-            aria-label="Browse folders"
-            title="Browse folders on the host"
-          >
-            <FolderOpen className="size-4" />
-            <span className="hidden sm:inline">Browse</span>
-          </Button>
-        </div>
-        <datalist id="remembered-folders">
-          {rememberedFolders.map((p) => (
-            <option key={p.id} value={p.directory}>
-              {p.name}
-            </option>
-          ))}
-        </datalist>
+        <FolderCombobox
+          host={selectedHost ?? null}
+          value={folder}
+          onChange={(next) => {
+            setFolder(next)
+            if (folderError) setFolderError(null)
+          }}
+          rememberedFolders={rememberedFolders}
+          disabled={hostId === null}
+        />
       </Field>
 
       <Field
@@ -351,17 +348,6 @@ function NewSessionForm({
           className="h-11 text-base sm:h-9 sm:text-sm"
         />
       </Field>
-
-      <FolderBrowser
-        host={selectedHost ?? null}
-        open={browseOpen}
-        onOpenChange={setBrowseOpen}
-        initialPath={folder.trim().startsWith('/') ? folder.trim() : undefined}
-        onSelect={(p) => {
-          setFolder(p)
-          setFolderError(null)
-        }}
-      />
 
       {installed.length > 1 && (
         <Field label="Agent">
