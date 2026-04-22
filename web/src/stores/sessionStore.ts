@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { SessionCreateRequest, SessionRecord } from 'sandbox-agent'
 import { connectToHost } from '@/services/sandboxAgent/client'
-import { requireHost } from './hostStore'
+import { requireHost, useHostStore, waitForHosts } from './hostStore'
 import { useMetadataStore } from './metadataStore'
 import { idbStorage } from './idbStorage'
 import {
@@ -21,6 +21,7 @@ interface SessionStoreState {
   filters: SessionFilters
 
   loadForHost(hostId: number): Promise<void>
+  loadAllHosts(): Promise<void>
   createSession(hostId: number, request: SessionCreateRequest): Promise<SessionRecord>
   destroySession(hostId: number, sessionId: string): Promise<void>
   setFilters(next: Partial<SessionFilters>): void
@@ -62,6 +63,32 @@ export const useSessionStore = create<SessionStoreState>()(
             isLoading: false,
           })
         }
+      },
+
+      async loadAllHosts() {
+        set({ isLoading: true, error: null })
+        await waitForHosts()
+        const hosts = useHostStore.getState().hosts
+        const entries = await Promise.allSettled(
+          hosts.map(async (h) => [h.id, await listRecordsForHost(h.id)] as const),
+        )
+        const next: Record<number, SessionRecord[]> = { ...get().byHost }
+        const failures: string[] = []
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i]
+          const host = hosts[i]
+          if (entry.status === 'fulfilled') {
+            next[entry.value[0]] = entry.value[1]
+          } else {
+            const msg = entry.reason instanceof Error ? entry.reason.message : 'load failed'
+            failures.push(`${host.name}: ${msg}`)
+          }
+        }
+        set({
+          byHost: next,
+          isLoading: false,
+          error: failures.length > 0 ? failures.join('; ') : null,
+        })
       },
 
       async createSession(hostId, request) {
