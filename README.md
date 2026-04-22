@@ -2,10 +2,10 @@
 
 Web + desktop + (Android) Tauri client for
 [Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent). Drives
-Claude, Codex, OpenCode, and Amp through a single backend, renders a
-dashboard of running/completed sessions with live status, lets you open
-several chats side-by-side, and syncs state across browsers via a small
-SQLite companion service.
+Claude, Codex, OpenCode, and Amp through a single backend. Mobile-first
+flat session home (filter chips + fuzzy search), multi-pane chat that
+can span hosts, and a small SQLite companion that also supervises the
+daemon so one command gets you a running environment.
 
 > **Status:** mid-migration from the legacy React Native / Expo app at
 > the repo root to a Vite + Tauri stack in `web/`. Legacy code still
@@ -56,18 +56,11 @@ current Expo app. Gets retired in migration Phase 10.
 ## Running locally
 
 All commands assume `nix develop` (direnv picks it up automatically).
+The `sandbox-agent` binary is supplied by the `wagent` flake input and
+is on PATH inside the dev shell. The companion spawns it as a child on
+startup, so there are only two processes to manage.
 
-### 1. Start the sandbox-agent daemon
-
-From `~/src/wagent`:
-
-```
-sandbox-agent server --no-token --host 0.0.0.0 --port 2468 \
-  --cors-allow-origin http://localhost:5173 \
-  --cors-allow-origin http://<your-host>:5173
-```
-
-### 2. Start the droidcode companion
+### 1. Start the companion (which also spawns the daemon on :2468)
 
 ```
 cd server
@@ -75,10 +68,13 @@ npm install
 npm run start
 ```
 
-This listens on `:2469` and stores its SQLite DB at
-`~/.local/share/droidcode/server.sqlite` by default.
+Listens on `:2469`, spawns `sandbox-agent server` on `:2468`, stores
+its SQLite DB at `~/.local/share/droidcode/server.sqlite`. Crashes
+of either get restarted automatically; SIGTERM/SIGINT propagate
+cleanly. Set `DROIDCODE_NO_DAEMON=1` to skip child-spawning if you
+run your own daemon.
 
-### 3. Start the web client
+### 2. Start the web client
 
 ```
 cd web
@@ -86,10 +82,11 @@ npm install
 npm run dev -- --host 0.0.0.0    # drop --host for localhost only
 ```
 
-Open `http://<host>:5173`. Add a host (port `2468`, companion URL
-`http://<host>:2469`) and you're in.
+Open `http://<host>:5173`. On first load the client auto-seeds a Host
+using the companion's `/v1/meta` hostname — no manual host-add step.
+Delete it from `/settings` if you want to start over.
 
-### 4. Legacy Expo app (still buildable)
+### 3. Legacy Expo app (still buildable)
 
 ```
 npm install    # root

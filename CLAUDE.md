@@ -23,23 +23,33 @@ For the end-to-end migration plan and decisions, **read `migration.md`.**
 
 ## Running locally
 
-Everything assumes `nix develop` (direnv handles it automatically).
+Everything assumes `nix develop` (direnv handles it automatically). The
+`sandbox-agent` binary ships via the `wagent` flake input, and the
+companion server spawns it as a child on startup — so you only manage
+two processes instead of three.
 
 ```bash
-# 1. Sandbox-agent daemon (in ~/src/wagent)
-sandbox-agent server --no-token --host 0.0.0.0 --port 2468 \
-  --cors-allow-origin http://localhost:5173
+# 1. Companion (also spawns sandbox-agent on :2468 as a child)
+cd server && npm install && npm run start    # listens on :2469
 
-# 2. Companion server
-cd server && npm install && npm run start   # listens on :2469
-
-# 3. Web client
-cd web && npm install && npm run dev         # vite on :5173
+# 2. Web client
+cd web && npm install && npm run dev          # vite on :5173
 ```
 
-Open `http://localhost:5173`, add a host pointing at `localhost:2468`,
-leave companion URL blank (defaults to `:2469` on same hostname), and
-you're in.
+Open `http://localhost:5173`. On first load the client auto-seeds a
+Host using the companion's `/v1/meta` hostname — no manual "Add host"
+step for the common single-machine case.
+
+Override daemon / companion behavior with env vars:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DROIDCODE_NO_DAEMON` | *unset* | Set to `1` to skip child-spawning the daemon (use when running your own) |
+| `DROIDCODE_DAEMON_BIN` | `sandbox-agent` | Override the daemon binary |
+| `DROIDCODE_DAEMON_PORT` | `2468` | Daemon port |
+| `DROIDCODE_DAEMON_HOST` | `0.0.0.0` | Daemon bind host |
+| `DROIDCODE_DAEMON_CORS` | *(empty)* | Comma-separated extra CORS origins appended to the defaults |
+| `DROIDCODE_VITE_PORT` | `5173` | Port used when building the default CORS origin list |
 
 ## Key commands (inside `nix develop`)
 
@@ -73,32 +83,35 @@ npm run lint
 ```
 web/src/
   routes/              TanStack Router file routes:
-                         /hosts, /hosts/add,
-                         /projects/$hostId,
-                         /sessions/$hostId/$projectId (dashboard),
-                         /chat/$hostId/$sessionId?extra=...,
-                         /settings
+                         /                 (flat session home, URL-backed filters)
+                         /chat/$hostId/$sessionId?extra=hostId:sessionId,…
+                         /settings         (hosts + theme + auto-accept + debug)
   components/
     ui/                shadcn components (copy/paste, don't edit)
+    home/              HomePage, FilterBar, SessionTile
     chat/              ChatPane, ChatInput, MessageBubble,
                        PermissionBanner, SessionSidebar,
                        AddPaneDialog, Markdown
-    NewSessionDialog.tsx
+    settings/          HostsSection
+    NewSessionDialog.tsx   (unified: Sheet on mobile, Dialog on desktop,
+                            inline Add-host flow)
   stores/              zustand — see web/README.md for the map
   services/
     sandboxAgent/      SDK connect + cached IndexedDB persist driver
     messaging/         event accumulator → Message[]
     db/                Dexie (hosts, projects, sessionPreferences,
                        hostModelDefaults)
-    sync/              companion REST client + eventMirror
-    sessions/          sort + filter helpers
+    sync/              companion REST client + eventMirror + meta fetch
+    sessions/          sort + filter helpers (sortAndFilter, homeFilters,
+                       panes)
     errors/, util/
   types/domain.ts      Host, ProjectFolder, SessionPreferences, …
 
 server/src/
-  server.ts            fastify entry
+  server.ts            fastify entry + daemon child-spawn wiring
+  daemon.ts            sandbox-agent lifecycle manager (spawn/restart/stop)
   db.ts                better-sqlite3 + migrations
-  routes/              sessions, events, projects, health
+  routes/              sessions, events, projects, health, (meta in server.ts)
 ```
 
 ## Cross-device model

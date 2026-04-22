@@ -36,26 +36,31 @@ npm run lint
 
 ```
 web/src/
-  routes/              # TanStack Router file routes
+  routes/              # TanStack Router — flat set:
+                       # /, /chat/$hostId/$sessionId, /settings
   components/
     ui/                # shadcn — copy/paste; don't edit in place
+    home/              # HomePage, FilterBar, SessionTile
     chat/              # ChatPane, ChatInput, MessageBubble,
                        # PermissionBanner, SessionSidebar, AddPaneDialog
-    NewSessionDialog.tsx
+    settings/          # HostsSection (host CRUD lives here, not a route)
+    NewSessionDialog.tsx   # unified creation modal — Sheet on mobile,
+                           # Dialog on desktop, inline Add-host flow
   stores/              # zustand stores; see web/README.md for map
   services/
     sandboxAgent/      # SDK connect + persist driver
     messaging/         # accumulator
-    sessions/          # sort/filter helpers
+    sessions/          # sortAndFilter, homeFilters (URL state), panes (cross-host tuples)
     db/                # Dexie tables
-    sync/              # companion REST client + eventMirror
+    sync/              # companion REST client + eventMirror + /v1/meta bootstrap
     errors/, util/
   types/domain.ts      # Host, ProjectFolder, SessionPreferences, etc.
 
 server/src/
-  server.ts            # fastify entry
+  server.ts            # fastify entry + daemon child-spawn wiring
+  daemon.ts            # sandbox-agent lifecycle manager
   db.ts                # better-sqlite3 + migrations
-  routes/              # sessions, events, projects, health
+  routes/              # sessions, events, projects, health (meta in server.ts)
 ```
 
 ## Architecture rules
@@ -74,7 +79,21 @@ server/src/
   `respondPermission` throws "permission not found" when the id was
   already consumed — treat that as a no-op, not a surfaced error.
 * **Don't re-introduce the `~`-path shortcut.** The daemon doesn't
-  expand tilde. Absolute paths only; `/projects/$hostId` validates.
+  expand tilde. Absolute paths only; `NewSessionDialog` validates
+  client-side before `createSession`.
+* **Don't add a new top-level route for a new feature unless it really
+  needs a distinct URL.** The flat home (`/`) + `/chat/...` + `/settings`
+  are the canonical surface. New filters / facets go into the home
+  URL search params (`?q=&h=&p=&s=&sort=`). New settings go into cards
+  in `/settings`. Don't re-nest hosts/projects/sessions.
+* **Put creation UX through the unified `NewSessionDialog`.** It does
+  host + folder pickers inline; don't spawn extra drill-downs. Pass
+  `initialHostId` / `initialCwd` when called from a context that already
+  knows them (e.g. the chat sidebar).
+* **Cross-host panes go through the tuple format.** `?extra=` values
+  are `hostId:sessionId,…`. Use `services/sessions/panes.ts`'s parse /
+  serialize / paneKey helpers — don't hand-roll encoding. Bare
+  sessionIds are accepted for legacy URLs only.
 * **Don't emoji in code.** Unicode icons are fine when they're part of
   the design system (lucide-react).
 

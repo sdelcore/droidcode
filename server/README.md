@@ -1,8 +1,16 @@
 # droidcode-server
 
-Small companion service that runs on the same host as `sandbox-agent` and
-holds shared metadata + mirrored event history in SQLite so multiple
-droidcode web/Tauri clients can see the same sessions.
+Companion service that owns two things on the daemon host:
+
+1. **Shared metadata + event history** for droidcode clients —
+   sessions, aliases, project folders, mirrored SessionEvent rows.
+   Persists to SQLite so multiple browsers/devices converge.
+2. **The `sandbox-agent` daemon itself.** The server spawns
+   `sandbox-agent server` as a child process on startup, pipes its
+   stdout/stderr into the Fastify logger, restarts it with exponential
+   backoff on crash, and shuts it down cleanly on SIGTERM/SIGINT. A
+   single `npm run start` gets you both services. Disable with
+   `DROIDCODE_NO_DAEMON=1` if you're running the daemon yourself.
 
 ## What it stores
 
@@ -16,6 +24,11 @@ droidcode web/Tauri clients can see the same sessions.
 
 ```
 GET    /v1/health
+GET    /v1/meta                         { hostname, daemon: { enabled, port,
+                                          running, pid, lastStartedAt,
+                                          lastExitCode, corsOrigins } }
+                                         — used by fresh web clients to
+                                          seed a default Host on first run
 GET    /v1/sessions
 GET    /v1/sessions/:id
 PUT    /v1/sessions/:id                 (upsert)
@@ -37,14 +50,27 @@ npm run start
 
 Environment:
 
+### Companion
+
 | Var | Default | Purpose |
 |---|---|---|
 | `DROIDCODE_HOST` | `0.0.0.0` | listen host |
 | `DROIDCODE_PORT` | `2469` | listen port (daemon is 2468) |
 | `DROIDCODE_DB` | `~/.local/share/droidcode/server.sqlite` | SQLite path |
 | `DROIDCODE_TOKEN` | *(unset)* | if set, clients must send `Authorization: Bearer <token>` |
-| `DROIDCODE_CORS` | `*` | comma-separated origins (e.g. `http://nightman:5173,http://localhost:5173`) |
+| `DROIDCODE_CORS` | `*` | comma-separated client origins allowed against companion endpoints |
 | `LOG_LEVEL` | `info` | fastify logger level |
+
+### Embedded daemon
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DROIDCODE_NO_DAEMON` | *unset* | Set to `1` to skip child-spawning sandbox-agent (when you run your own) |
+| `DROIDCODE_DAEMON_BIN` | `sandbox-agent` | Binary to exec (must be on PATH; `nix develop` provides it via wagent) |
+| `DROIDCODE_DAEMON_PORT` | `2468` | Daemon port |
+| `DROIDCODE_DAEMON_HOST` | `0.0.0.0` | Daemon bind address |
+| `DROIDCODE_DAEMON_CORS` | *(empty)* | Comma-separated extra CORS origins appended to the defaults. sandbox-agent doesn't accept `*`; list explicit origins |
+| `DROIDCODE_VITE_PORT` | `5173` | Port used when building the default daemon CORS origin list (localhost / 127.0.0.1 / os.hostname() at this port) |
 
 ## Deployment
 

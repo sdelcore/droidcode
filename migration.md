@@ -256,6 +256,18 @@ Phases 1–6 landed roughly as drafted. Phase 5 shipped as an MVC (no shiki / vi
 * **Session sidebar + "New session"** directly from the chat view.
 * **Cross-device sync via `droidcode-server`** (see Decision 6). Sessions / aliases / projects / event history all mirror to a SQLite-backed companion. Old `~/.droidcode.json` experiment deleted.
 
+### Phase 6.5 — Flat home + embedded daemon + mobile-first (2026-04-22)
+
+Second round of design expansion, driven by real mobile use:
+
+* **Flat session home at `/`** replaces the hosts → projects → sessions drill-down entirely. Every session across every host renders as a tile in one mobile-first grid (1 col phone, 2 col tablet, 3–4 col desktop). Filter chips for hosts / projects / status cascade; fuzzy text search runs over alias / cwd / agent. Filter state lives in URL search params so filters are shareable and survive back/forward.
+* **Cross-host panes** — `?extra=` upgraded from `sessionId[]` to `hostId:sessionId[]` tuples (`services/sessions/panes.ts`). Legacy bare-id tokens still parse as same-host for old bookmarks. Multi-select on the home grid → "Open in panes" button emits tuple-encoded URLs. TabBar + TopBar show a "multi-host" indicator when panes span hosts.
+* **Unified New Session modal** — `NewSessionDialog` absorbs the "+ Add host" flow inline (name / host / port / HTTPS / token → health ping → save). Folder picker uses a `<datalist>` of remembered project folders; typing a new absolute path persists a ProjectFolder on submit; `~` / relative paths are rejected with a clear error. Bottom sheet on mobile, centered dialog on desktop. Inputs use 16px font-size to prevent iOS zoom.
+* **Embedded daemon in the companion** — `droidcode-server` spawns `sandbox-agent server` as a child on startup, tracks PID, restarts on crash with exponential backoff, shuts it down on SIGTERM/SIGINT. One `npm run start` brings up both. The `wagent` repo is pinned as a flake input so `sandbox-agent` is on PATH inside `nix develop` without a separate checkout.
+* **Hostname-seeded default host** — new `GET /v1/meta` endpoint returns `{ hostname, daemon: { port, running, corsOrigins, … } }`. On first app load with zero hosts, the client fetches it and auto-creates a Host named after the machine (e.g. `nightman`) pointing at the local daemon. Marked in localStorage so it doesn't re-seed if the user deletes it.
+* **Routes collapsed** — `/hosts`, `/hosts/add`, `/projects/$hostId`, `/sessions/$hostId/$projectId` all deleted. Host CRUD moves into a `HostsSection` card in `/settings`. Remaining routes: `/`, `/chat/$hostId/$sessionId`, `/settings`.
+* **SDK_LIMITATIONS** — added row 17 (`sandbox-agent --cors-allow-origin` rejects `*`; companion enumerates origins explicitly).
+
 Phases 7–10 still pending.
 
 ---

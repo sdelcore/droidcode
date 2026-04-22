@@ -57,13 +57,35 @@ wired (Phase 8).
 ## Routes
 
 ```
-/hosts                                   — saved hosts
-/hosts/add                               — add form
-/projects/$hostId                        — agents + remembered cwds
-/sessions/$hostId/$projectId             — dashboard grid (tiles)
-/chat/$hostId/$sessionId?extra=sid2,…    — chat, up to 3 panes + sidebar
-/settings                                — theme + auto-accept + debug
+/                                                  — flat session home:
+                                                     tiles grouped by
+                                                     host/project/status,
+                                                     filter chips + fuzzy
+                                                     search. URL-backed
+                                                     filter state.
+/chat/$hostId/$sessionId?extra=hostId:sessionId,…  — chat, up to 3 panes +
+                                                     sidebar. Panes can
+                                                     span hosts (tuple
+                                                     format).
+/settings                                          — hosts CRUD, theme,
+                                                     auto-accept, debug
+                                                     logs
 ```
+
+### Home-page URL filter state
+
+```
+/?q=search&h=1,2&p=/abs/path&s=running,completed&sort=alpha
+```
+
+- `q` — fuzzy text (alias, cwd, hostname, agent)
+- `h` — comma-separated hostIds
+- `p` — comma-separated project directories (cwd paths)
+- `s` — comma-separated statuses: `running | completed`
+- `sort` — `recent | created | alpha` (`recent` is the default)
+
+Project chips cascade from the host selection. Filters serialize
+verbatim into the URL so they're shareable and survive back/forward.
 
 ## Store + service map
 
@@ -76,6 +98,8 @@ stores/
                       metadataStore on upsert/remove.
   sessionStore      — calls sdk.listSessions / createSession /
                       destroySession; mirrors to metadataStore too.
+                      loadAllHosts() fans out listSessions across every
+                      registered host in parallel (home page calls this).
   chatStore         — session-keyed Map of { messages, status,
                       pendingPermission, isStreaming }. Uses the
                       SDK's Session handle + our accumulator.
@@ -102,9 +126,16 @@ services/
                              strips the SDK's replay-prefix prompt.
   db/                     — Dexie v1: hosts, projects, sessionPreferences,
                              hostModelDefaults.
-  sessions/sortAndFilter.ts — pure fns: mode/cwd/running, 6 sort presets.
+  sessions/
+    sortAndFilter.ts      — pure fns: mode/cwd/running, 6 sort presets.
+    homeFilters.ts        — URL search schema, facet derivation, flat
+                             session projection, home-grid filter + sort.
+    panes.ts              — PaneRef tuple encode/parse for cross-host
+                             extra= param.
   sync/
-    companion.ts          — REST client for droidcode-server.
+    companion.ts          — REST client for droidcode-server. Includes
+                             fetchBootstrapMeta() used on first run to
+                             seed a default Host from os.hostname().
     eventMirror.ts        — per-session debounced POST queue.
     bootstrapFromMetadata.ts — hydrate SDK persist + Dexie +
                                 sessionPreferences on first connect.
