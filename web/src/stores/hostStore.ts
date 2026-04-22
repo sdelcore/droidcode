@@ -1,7 +1,10 @@
 import { create } from 'zustand'
 import { hostRepository } from '@/services/db'
 import { disconnectHost } from '@/services/sandboxAgent/client'
+import { fetchBootstrapMeta } from '@/services/sync/companion'
 import type { Host } from '@/types'
+
+const SEED_FLAG_KEY = 'droidcode:default-host-seeded'
 
 interface HostStoreState {
   hosts: Host[]
@@ -22,13 +25,56 @@ interface HostStoreState {
 
 async function bootstrapHosts(): Promise<{ hosts: Host[]; error: string | null }> {
   try {
-    const hosts = await hostRepository.getAll()
+    let hosts = await hostRepository.getAll()
+    if (hosts.length === 0 && !hasSeededFlag()) {
+      const seeded = await seedDefaultHost()
+      if (seeded) {
+        markSeeded()
+        hosts = await hostRepository.getAll()
+      }
+    }
     return { hosts, error: null }
   } catch (error) {
     return {
       hosts: [],
       error: error instanceof Error ? error.message : 'Failed to load hosts',
     }
+  }
+}
+
+function hasSeededFlag(): boolean {
+  try {
+    return localStorage.getItem(SEED_FLAG_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function markSeeded(): void {
+  try {
+    localStorage.setItem(SEED_FLAG_KEY, '1')
+  } catch {
+    // private browsing / disabled storage — non-fatal, the seed will
+    // just re-run next time the list is empty.
+  }
+}
+
+// Try to learn the machine hostname from the companion's /v1/meta endpoint
+// and seed a Host pointing at the local daemon. Falls back to "localhost"
+// if the companion is unreachable so the first-run experience still works.
+async function seedDefaultHost(): Promise<Host | null> {
+  const meta = await fetchBootstrapMeta()
+  const hostname = meta?.hostname ?? 'localhost'
+  const daemonPort = meta?.daemon.port ?? 2468
+  try {
+    return await hostRepository.create({
+      name: hostname,
+      host: hostname,
+      port: daemonPort,
+      isSecure: false,
+    })
+  } catch {
+    return null
   }
 }
 

@@ -76,6 +76,40 @@ export async function isCompanionReachable(host: Host): Promise<boolean> {
   }
 }
 
+export interface CompanionMeta {
+  hostname: string
+  daemon: {
+    enabled: boolean
+    port: number
+    running: boolean
+    pid: number | null
+    lastStartedAt: number | null
+    lastExitCode: number | null
+    corsOrigins: string[]
+  }
+}
+
+// Bootstrap meta fetch — used on first run before any Host exists. Assumes
+// the companion runs on the same machine as the web server at :2469.
+export async function fetchBootstrapMeta(
+  baseUrl = defaultBootstrapCompanionUrl(),
+): Promise<CompanionMeta | null> {
+  try {
+    const res = await fetch(`${baseUrl}/v1/meta`)
+    if (!res.ok) return null
+    return (await res.json()) as CompanionMeta
+  } catch {
+    return null
+  }
+}
+
+function defaultBootstrapCompanionUrl(): string {
+  if (typeof window === 'undefined') return 'http://localhost:2469'
+  const protocol = window.location.protocol === 'https:' ? 'https' : 'http'
+  const host = window.location.hostname || 'localhost'
+  return `${protocol}://${host}:2469`
+}
+
 export async function listSessions(host: Host): Promise<CompanionSession[]> {
   const res = await request<{ sessions: CompanionSession[] }>(host, '/v1/sessions')
   return res.sessions ?? []
