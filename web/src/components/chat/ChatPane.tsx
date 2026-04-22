@@ -92,7 +92,7 @@ export function ChatPane({
       <div className="flex flex-1 flex-col items-start gap-4 p-6">
         <p className="text-sm text-muted-foreground">Host not found.</p>
         <Button asChild size="sm" variant="outline">
-          <Link to="/hosts">Back to hosts</Link>
+          <Link to="/">Back to home</Link>
         </Button>
       </div>
     )

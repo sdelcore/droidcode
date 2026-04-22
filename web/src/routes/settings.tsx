@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { HostsSection } from '@/components/settings/HostsSection'
 import { useSettingsStore } from '@/stores'
 
 export const Route = createFileRoute('/settings')({
@@ -37,6 +38,8 @@ function Settings() {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <HostsSection />
 
       <Card>
         <CardHeader>

@@ -28,13 +28,6 @@ function RootLayout() {
               </Link>
               <nav className="flex items-center gap-4 text-sm text-muted-foreground">
                 <Link
-                  to="/hosts"
-                  activeProps={{ className: 'text-foreground' }}
-                  className="hover:text-foreground"
-                >
-                  Hosts
-                </Link>
-                <Link
                   to="/settings"
                   activeProps={{ className: 'text-foreground' }}
                   className="hover:text-foreground"
