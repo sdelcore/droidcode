@@ -4,9 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    wagent.url = "github:sdelcore/wagent";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, wagent }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -72,7 +73,7 @@
             wrapGAppsHook3
           ];
 
-          buildInputs = with pkgs; [
+          buildInputs = (with pkgs; [
             # Web toolchain
             nodejs_22
             nodePackages.npm
@@ -90,7 +91,12 @@
             jdk17
             watchman
             gradle
-          ] ++ tauriBuildInputs;
+          ]) ++ tauriBuildInputs ++ [
+            # Rivet sandbox-agent daemon — pinned via the wagent flake.
+            # Companion server spawns this as a child on startup so the app
+            # ships with a working local host out of the box.
+            wagent.packages.${system}.sandbox-agent
+          ];
 
           shellHook = ''
             export ANDROID_HOME="${androidSdk}/libexec/android-sdk"
