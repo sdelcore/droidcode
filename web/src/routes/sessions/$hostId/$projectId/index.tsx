@@ -342,11 +342,11 @@ function SessionDashboard() {
 
       {project && (
         <NewSessionDialog
-          hostId={numericHostId}
-          cwd={project.directory}
+          initialHostId={numericHostId}
+          initialCwd={project.directory}
           open={newSessionOpen}
           onOpenChange={setNewSessionOpen}
-          onCreated={handleSessionCreated}
+          onCreated={(_hostId, sessionId) => handleSessionCreated(sessionId)}
         />
       )}
     </main>

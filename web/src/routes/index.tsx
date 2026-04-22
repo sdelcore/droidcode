@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { HomePage } from '@/components/home/HomePage'
+import { NewSessionDialog } from '@/components/NewSessionDialog'
 import { validateHomeSearch, type HomeSearch } from '@/services/sessions/homeFilters'
 
 export const Route = createFileRoute('/')({
@@ -10,10 +12,21 @@ export const Route = createFileRoute('/')({
 function HomeRoute() {
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
-  // Placeholder: the unified New Session modal lands in the next commit.
-  // Until then, the old drill-down at /hosts still works and can reach
-  // the existing NewSessionDialog via a project page.
-  const requestNewSession = () => navigate({ to: '/hosts' })
+  const [newOpen, setNewOpen] = useState(false)
 
-  return <HomePage search={search} onRequestNewSession={requestNewSession} />
+  return (
+    <>
+      <HomePage search={search} onRequestNewSession={() => setNewOpen(true)} />
+      <NewSessionDialog
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onCreated={(hostId, sessionId) =>
+          navigate({
+            to: '/chat/$hostId/$sessionId',
+            params: { hostId: String(hostId), sessionId },
+          })
+        }
+      />
+    </>
+  )
 }

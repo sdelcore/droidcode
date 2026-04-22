@@ -102,11 +102,11 @@ export function SessionSidebar({
       </Button>
       {defaultCwd && (
         <NewSessionDialog
-          hostId={hostId}
-          cwd={defaultCwd}
+          initialHostId={hostId}
+          initialCwd={defaultCwd}
           open={newSessionOpen}
           onOpenChange={setNewSessionOpen}
-          onCreated={(sessionId) => onOpenPrimary(sessionId)}
+          onCreated={(_hostId, sessionId) => onOpenPrimary(sessionId)}
         />
       )}
       <Input
