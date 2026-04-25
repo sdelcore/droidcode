@@ -30,9 +30,8 @@
           includeEmulator = true;
           includeSystemImages = true;
           includeNDK = true;
-          # NDK 27.1.12297006 required by React Native 0.81+ (legacy Expo app)
-          # and used by Tauri 2 Android target in Phase 9.
-          ndkVersions = [ "27.1.12297006" "26.1.10909125" ];
+          # NDK 27.1.12297006 used by Tauri 2 Android target.
+          ndkVersions = [ "27.1.12297006" ];
           cmakeVersions = [ "3.22.1" ];
           includeSources = false;
           extraLicenses = [
@@ -86,10 +85,9 @@
             rustfmt
             clippy
 
-            # Android (legacy Expo app + Phase 9 Tauri Android)
+            # Android (Tauri Android target)
             androidSdk
             jdk17
-            watchman
             gradle
           ]) ++ tauriBuildInputs ++ [
             # Rivet sandbox-agent daemon — pinned via the wagent flake.
@@ -112,15 +110,14 @@
             export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"
 
             # Add platform-tools + node_modules/.bin to PATH
-            export PATH="$ANDROID_HOME/platform-tools:$PWD/web/node_modules/.bin:$PWD/node_modules/.bin:$PATH"
+            export PATH="$ANDROID_HOME/platform-tools:$PWD/node_modules/.bin:$PATH"
 
             echo "DroidCode dev environment (Vite + Tauri 2)"
             echo ""
-            echo "  Web:      cd web && npm run dev"
-            echo "  Tauri:    cd web && cargo tauri dev"
-            echo "  Build:    cd web && npm run build && cargo tauri build"
-            echo ""
-            echo "  Legacy Expo app still buildable via npm start (repo root)."
+            echo "  Web:      npm run dev"
+            echo "  Tauri:    cargo tauri dev"
+            echo "  Build:    npm run build && cargo tauri build"
+            echo "  Server:   cd server && npm run start"
             echo ""
           '';
         };
