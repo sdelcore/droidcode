@@ -1,12 +1,12 @@
 import { create } from 'zustand'
-import type { AgentInfo } from 'sandbox-agent'
-import { connectToHost } from '@/services/sandboxAgent/client'
+import type { AgentAvailability } from '@/services/wagent'
+import { connectToHost } from '@/services/wagent'
 import { hostModelDefaultsRepository } from '@/services/db'
 import { requireHost } from './hostStore'
 import type { HostModelDefault } from '@/types'
 
 interface ConfigStoreState {
-  agentsByHost: Record<number, AgentInfo[]>
+  agentsByHost: Record<number, AgentAvailability[]>
   defaultsByHost: Record<number, HostModelDefault | null>
   isLoading: boolean
   error: string | null
@@ -28,10 +28,10 @@ export const useConfigStore = create<ConfigStoreState>()((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const host = await requireHost(hostId)
-      const sdk = await connectToHost(host)
-      const res = await sdk.listAgents({ config: true })
+      const client = connectToHost(host)
+      const agents = await client.listAgents()
       set({
-        agentsByHost: { ...get().agentsByHost, [hostId]: res.agents },
+        agentsByHost: { ...get().agentsByHost, [hostId]: agents },
         isLoading: false,
       })
     } catch (error) {

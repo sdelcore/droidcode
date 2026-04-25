@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import type {
-  PermissionReply,
-  Session,
-  SessionEvent,
-  SessionPermissionRequest,
-} from 'sandbox-agent'
-import { connectToHost } from '@/services/sandboxAgent/client'
+  EventEnvelope,
+  PermissionOutcome,
+  PermissionRequestPayload,
+  WagentClient,
+} from '@/services/wagent'
+import { connectToHost } from '@/services/wagent'
 import { requireHost } from './hostStore'
 import { useSettingsStore } from './settingsStore'
 
@@ -19,9 +19,8 @@ export interface LiveSessionStatus {
 }
 
 interface WatchEntry {
-  session: Session
-  unsubEvents: () => void
-  unsubPermissions: () => void
+  client: WagentClient
+  unsubscribe: () => void
   watchers: number
   streamingTimer: ReturnType<typeof setTimeout> | null
 }
@@ -31,11 +30,6 @@ interface SessionLiveStoreState {
   watch(hostId: number, sessionId: string): Promise<void>
   unwatch(hostId: number, sessionId: string): void
   clearPendingPermission(sessionId: string): void
-}
-
-function isPermissionNotFound(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  return /permission .*not found/i.test(error.message)
 }
 
 const FILE_EDIT_TOOLS = new Set([
@@ -49,37 +43,16 @@ const FILE_EDIT_TOOLS = new Set([
 
 const STREAMING_IDLE_MS = 2500
 
-// Entry map lives outside the store because Session/timer handles aren't
-// serializable and we don't want React touching them.
 const entries = new Map<string, WatchEntry>()
 
 function key(hostId: number, sessionId: string) {
   return `${hostId}:${sessionId}`
 }
 
-function countsFromEvent(event: SessionEvent): {
-  tool: boolean
-  fileEdit: boolean
-  agentChunk: boolean
-} {
-  const payload = event.payload as { method?: string; params?: unknown } | null
-  if (!payload || payload.method !== 'session/update') {
-    return { tool: false, fileEdit: false, agentChunk: false }
-  }
-  const params = payload.params as
-    | { update?: { sessionUpdate?: string; title?: string; _meta?: { claudeCode?: { toolName?: string } } } }
-    | undefined
-  const update = params?.update
-  if (!update) return { tool: false, fileEdit: false, agentChunk: false }
-
-  if (update.sessionUpdate === 'tool_call') {
-    const toolName = update._meta?.claudeCode?.toolName ?? update.title ?? ''
-    return { tool: true, fileEdit: FILE_EDIT_TOOLS.has(toolName), agentChunk: false }
-  }
-  if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') {
-    return { tool: false, fileEdit: false, agentChunk: true }
-  }
-  return { tool: false, fileEdit: false, agentChunk: false }
+function isFileEditTool(payload: { name?: unknown; title?: unknown }): boolean {
+  const name = typeof payload.name === 'string' ? payload.name : ''
+  const title = typeof payload.title === 'string' ? payload.title : ''
+  return FILE_EDIT_TOOLS.has(name) || FILE_EDIT_TOOLS.has(title)
 }
 
 export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) => ({
@@ -93,7 +66,6 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
       return
     }
 
-    // Register a placeholder status immediately so UI doesn't flicker.
     if (!get().statuses[sessionId]) {
       set((state) => ({
         statuses: {
@@ -110,9 +82,8 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
     }
 
     const entry: WatchEntry = {
-      session: null as unknown as Session,
-      unsubEvents: () => {},
-      unsubPermissions: () => {},
+      client: null as unknown as WagentClient,
+      unsubscribe: () => {},
       watchers: 1,
       streamingTimer: null,
     }
@@ -120,96 +91,26 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
 
     try {
       const host = await requireHost(hostId)
-      const sdk = await connectToHost(host)
-      const session = await sdk.resumeSession(sessionId)
-      entry.session = session
+      const client = connectToHost(host)
+      entry.client = client
 
-      const applyEventCounts = (event: SessionEvent) => {
-        const counts = countsFromEvent(event)
-        if (!counts.tool && !counts.fileEdit && !counts.agentChunk) return
-
-        set((state) => {
-          const current = state.statuses[sessionId]
-          if (!current) return state
-          const next: LiveSessionStatus = {
-            ...current,
-            toolCalls: current.toolCalls + (counts.tool ? 1 : 0),
-            fileChanges: current.fileChanges + (counts.fileEdit ? 1 : 0),
-            streaming: counts.agentChunk ? true : current.streaming,
-            lastActivityAt: event.createdAt,
-          }
-          return { statuses: { ...state.statuses, [sessionId]: next } }
-        })
-
-        if (counts.agentChunk) {
-          if (entry.streamingTimer) clearTimeout(entry.streamingTimer)
-          entry.streamingTimer = setTimeout(() => {
-            set((state) => {
-              const current = state.statuses[sessionId]
-              if (!current || !current.streaming) return state
-              return {
-                statuses: {
-                  ...state.statuses,
-                  [sessionId]: { ...current, streaming: false },
-                },
-              }
-            })
-          }, STREAMING_IDLE_MS)
-        }
-      }
-
-      const applyPermission = (req: SessionPermissionRequest) => {
-        const autoAccept = useSettingsStore.getState().autoAcceptPermissions
-        if (autoAccept) {
-          // Auto-accept here too (not just in chatStore), so sessions that
-          // the user has never opened still get permission requests
-          // resolved. Otherwise the "?" badge would hang forever on any
-          // session that fires a permission before the user opens its
-          // chat pane. Race with chatStore is safe — duplicate responses
-          // throw "permission not found" which we swallow (SDK #8/#9).
-          const preferred: PermissionReply[] = ['always', 'once', 'reject']
-          const reply = preferred.find((r) => req.availableReplies.includes(r))
-          if (reply && reply !== 'reject') {
-            entry.session.respondPermission(req.id, reply).then(
-              () => {
-                get().clearPendingPermission(sessionId)
-              },
-              (err) => {
-                if (isPermissionNotFound(err)) {
-                  get().clearPendingPermission(sessionId)
-                  return
-                }
-                // Fall through: leave the badge so the user notices.
-                console.error('live auto-accept permission failed', err)
-              },
-            )
-            // Don't flip the badge on when we're about to resolve it ourselves.
-            return
-          }
-        }
-        set((state) => {
-          const current = state.statuses[sessionId]
-          if (!current) return state
-          return {
-            statuses: {
-              ...state.statuses,
-              [sessionId]: { ...current, pendingPermission: true, lastActivityAt: req.createdAt },
-            },
-          }
-        })
-      }
-
-      // Historical counts: scan once up to a generous limit.
+      // Backfill counts from history.
       try {
-        const page = await sdk.getEvents({ sessionId, limit: 500 })
+        const history = await client.listEvents(sessionId, { limit: 500 })
         let tool = 0
         let fileEdit = 0
         let lastActivityAt: number | undefined
-        for (const event of page.items) {
-          const counts = countsFromEvent(event)
-          if (counts.tool) tool++
-          if (counts.fileEdit) fileEdit++
-          if (counts.tool || counts.agentChunk) lastActivityAt = event.createdAt
+        for (const e of history) {
+          if (e.payload.kind === 'tool_call') {
+            tool++
+            if (isFileEditTool(e.payload as { name?: unknown; title?: unknown })) fileEdit++
+            lastActivityAt = e.createdAt
+          } else if (
+            e.payload.kind === 'agent_message_chunk' ||
+            e.payload.kind === 'agent_thought_chunk'
+          ) {
+            lastActivityAt = e.createdAt
+          }
         }
         set((state) => {
           const current = state.statuses[sessionId]
@@ -227,15 +128,119 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
           }
         })
       } catch {
-        // Best-effort; counts will accumulate from live events.
+        // best-effort
       }
 
-      entry.unsubEvents = session.onEvent(applyEventCounts)
-      entry.unsubPermissions = session.onPermissionRequest(applyPermission)
+      const onEvent = (event: EventEnvelope) => {
+        const payload = event.payload
+        switch (payload.kind) {
+          case 'tool_call':
+            set((state) => {
+              const current = state.statuses[sessionId]
+              if (!current) return state
+              return {
+                statuses: {
+                  ...state.statuses,
+                  [sessionId]: {
+                    ...current,
+                    toolCalls: current.toolCalls + 1,
+                    fileChanges:
+                      current.fileChanges +
+                      (isFileEditTool(payload as { name?: unknown; title?: unknown }) ? 1 : 0),
+                    lastActivityAt: event.createdAt,
+                  },
+                },
+              }
+            })
+            break
+
+          case 'agent_message_chunk':
+          case 'agent_thought_chunk':
+            set((state) => {
+              const current = state.statuses[sessionId]
+              if (!current) return state
+              return {
+                statuses: {
+                  ...state.statuses,
+                  [sessionId]: {
+                    ...current,
+                    streaming: true,
+                    lastActivityAt: event.createdAt,
+                  },
+                },
+              }
+            })
+            if (entry.streamingTimer) clearTimeout(entry.streamingTimer)
+            entry.streamingTimer = setTimeout(() => {
+              set((state) => {
+                const current = state.statuses[sessionId]
+                if (!current || !current.streaming) return state
+                return {
+                  statuses: {
+                    ...state.statuses,
+                    [sessionId]: { ...current, streaming: false },
+                  },
+                }
+              })
+            }, STREAMING_IDLE_MS)
+            break
+
+          case 'permission_request': {
+            const req = payload as unknown as PermissionRequestPayload
+            const autoAccept = useSettingsStore.getState().autoAcceptPermissions
+            if (autoAccept) {
+              const preferred: PermissionOutcome[] = ['allow_always', 'allow_once', 'reject']
+              const outcome = preferred.find((o) =>
+                req.availableOutcomes?.includes(o),
+              )
+              if (outcome && outcome !== 'reject') {
+                client.respondPermission(sessionId, req.requestId, outcome).catch(() => {
+                  // wagent dedupes server-side; ignore.
+                })
+                return
+              }
+            }
+            set((state) => {
+              const current = state.statuses[sessionId]
+              if (!current) return state
+              return {
+                statuses: {
+                  ...state.statuses,
+                  [sessionId]: {
+                    ...current,
+                    pendingPermission: true,
+                    lastActivityAt: event.createdAt,
+                  },
+                },
+              }
+            })
+            break
+          }
+
+          case 'permission_resolved':
+            get().clearPendingPermission(sessionId)
+            break
+
+          case 'stop':
+            set((state) => {
+              const current = state.statuses[sessionId]
+              if (!current) return state
+              return {
+                statuses: {
+                  ...state.statuses,
+                  [sessionId]: { ...current, streaming: false },
+                },
+              }
+            })
+            break
+
+          default:
+            break
+        }
+      }
+
+      entry.unsubscribe = client.subscribeEvents(sessionId, onEvent)
     } catch {
-      // Failed to attach — leave the entry so repeat watch() calls don't
-      // retry endlessly, but keep the placeholder status so the tile
-      // renders something sensible.
       entries.delete(k)
     }
   },
@@ -260,8 +265,7 @@ export const useSessionLiveStore = create<SessionLiveStoreState>()((set, get) =>
     entry.watchers -= 1
     if (entry.watchers > 0) return
 
-    entry.unsubEvents()
-    entry.unsubPermissions()
+    entry.unsubscribe()
     if (entry.streamingTimer) clearTimeout(entry.streamingTimer)
     entries.delete(k)
 

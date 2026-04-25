@@ -86,7 +86,7 @@ function ChatScreen() {
 
   const primaryCwd = useMemo(() => {
     const primary = sessions?.find((s) => s.id === sessionId)
-    return (primary?.sessionInit as { cwd?: string } | undefined)?.cwd
+    return primary?.cwd
   }, [sessions, sessionId])
 
   useEffect(() => {

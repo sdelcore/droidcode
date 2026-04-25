@@ -1,33 +1,17 @@
-import type { SessionEvent } from 'sandbox-agent'
+import type { ContentBlock, EventEnvelope } from '@/services/wagent'
 import type { Message, MessagePart } from '@/types'
-
-type SessionUpdatePayload = {
-  sessionUpdate: string
-  content?: {
-    type: string
-    text?: string
-  }
-  messageId?: string | null
-  toolCallId?: string
-  title?: string
-  status?: 'pending' | 'in_progress' | 'completed' | 'failed' | string
-  kind?: string
-  content_?: unknown
-  // tool_call rich content omitted in v1; see Phase 5
-}
 
 interface AccumulatorState {
   messages: Message[]
-  // Last seen ContentChunk messageId, per role, so we know when a new message starts.
-  lastMessageIdByRole: Partial<Record<'user' | 'assistant', string>>
-  // Tool-call part index: toolCallId → { messageIndex, partIndex }
+  lastAgentMessageId: string | undefined
+  // toolCallId → coordinates so tool_call_update can mutate the right part.
   toolCallIndex: Map<string, { messageIndex: number; partIndex: number }>
 }
 
 export class MessageAccumulator {
   private state: AccumulatorState = {
     messages: [],
-    lastMessageIdByRole: {},
+    lastAgentMessageId: undefined,
     toolCallIndex: new Map(),
   }
 
@@ -38,34 +22,60 @@ export class MessageAccumulator {
   reset(): void {
     this.state = {
       messages: [],
-      lastMessageIdByRole: {},
+      lastAgentMessageId: undefined,
       toolCallIndex: new Map(),
     }
   }
 
-  // Append a user message from a client session/prompt event, creating a
-  // turn boundary so the agent's reply opens a fresh assistant bubble.
-  pushUserMessage(
-    prompt: ExtractedPrompt,
-    event?: SessionEvent,
-  ): void {
+  push(event: EventEnvelope): void {
+    const payload = event.payload
+    switch (payload.kind) {
+      case 'user_message_chunk':
+        this.startUserMessage(event, payload as UserMessagePayload)
+        break
+      case 'agent_message_chunk':
+        this.appendAgentChunk(event, payload as AgentChunkPayload, 'text')
+        break
+      case 'agent_thought_chunk':
+        this.appendAgentChunk(event, payload as AgentChunkPayload, 'thought')
+        break
+      case 'tool_call':
+        this.startToolCall(event, payload as ToolCallPayload)
+        break
+      case 'tool_call_update':
+        this.updateToolCall(payload as ToolCallUpdatePayload)
+        break
+      case 'stop':
+        this.markStreamingDone()
+        break
+      // plan / permission_request / permission_resolved / subprocess_died /
+      // session_destroyed are surfaced by stores directly, not in messages.
+      default:
+        break
+    }
+  }
+
+  private startUserMessage(event: EventEnvelope, payload: UserMessagePayload): void {
     const last = this.state.messages[this.state.messages.length - 1]
     if (last) last.isStreaming = false
-    const id = event ? `u:${event.id}` : `u:${Date.now()}:${this.state.messages.length}`
 
+    const id = `u:${event.eventIndex}`
     const parts: MessagePart[] = []
-    for (let i = 0; i < prompt.images.length; i++) {
-      const img = prompt.images[i]
-      parts.push({
-        kind: 'image',
-        id: `${id}:img:${i}`,
-        content: '',
-        dataUrl: `data:${img.mimeType};base64,${img.data}`,
-        mimeType: img.mimeType,
-      })
-    }
-    if (prompt.text) {
-      parts.push({ kind: 'text', id: `${id}:${parts.length}`, content: prompt.text })
+    const content = Array.isArray(payload.content) ? payload.content : []
+    for (let i = 0; i < content.length; i++) {
+      const block = content[i]
+      if (!block) continue
+      if (block.type === 'image' && block.data && block.mimeType) {
+        parts.push({
+          kind: 'image',
+          id: `${id}:img:${i}`,
+          content: '',
+          dataUrl: `data:${block.mimeType};base64,${block.data}`,
+          mimeType: block.mimeType,
+        })
+      } else if (block.type === 'text' && typeof block.text === 'string') {
+        parts.push({ kind: 'text', id: `${id}:${parts.length}`, content: block.text })
+      }
     }
 
     this.state.messages.push({
@@ -73,56 +83,20 @@ export class MessageAccumulator {
       role: 'user',
       parts,
       isStreaming: false,
-      createdAt: event?.createdAt ?? Date.now(),
+      createdAt: event.createdAt,
     })
-    this.state.lastMessageIdByRole.assistant = undefined
+    this.state.lastAgentMessageId = undefined
   }
 
-  push(event: SessionEvent): void {
-    // Rivet doesn't emit user_message_chunk for the client's own prompts,
-    // so synthesize a user message from the session/prompt request.
-    const prompt = extractClientPrompt(event)
-    if (prompt !== undefined) {
-      this.pushUserMessage(prompt, event)
-      return
-    }
-
-    const update = extractSessionUpdate(event)
-    if (!update) return
-
-    switch (update.sessionUpdate) {
-      case 'user_message_chunk':
-        this.appendChunk('user', event, update)
-        break
-      case 'agent_message_chunk':
-        this.appendChunk('assistant', event, update, 'text')
-        break
-      case 'agent_thought_chunk':
-        this.appendChunk('assistant', event, update, 'thought')
-        break
-      case 'tool_call':
-        this.startToolCall(event, update)
-        break
-      case 'tool_call_update':
-        this.updateToolCall(update)
-        break
-      // Other updates (plan, usage_update, mode/config updates) are not
-      // rendered in the accumulator; stores consume them directly.
-      default:
-        break
-    }
-  }
-
-  private appendChunk(
-    role: 'user' | 'assistant',
-    event: SessionEvent,
-    update: SessionUpdatePayload,
-    partKind: 'text' | 'thought' = 'text',
+  private appendAgentChunk(
+    event: EventEnvelope,
+    payload: AgentChunkPayload,
+    partKind: 'text' | 'thought',
   ): void {
-    const text = update.content?.type === 'text' ? (update.content.text ?? '') : ''
-    const messageId = update.messageId ?? undefined
-    const target = this.resolveOrCreateMessage(role, event, messageId)
+    const messageId = payload.messageId ?? undefined
+    const target = this.resolveOrCreateAssistant(event, messageId)
 
+    const text = typeof payload.text === 'string' ? payload.text : ''
     const lastPart = target.parts[target.parts.length - 1]
     if (lastPart && lastPart.kind === partKind) {
       lastPart.content += text
@@ -135,17 +109,17 @@ export class MessageAccumulator {
     }
   }
 
-  private startToolCall(event: SessionEvent, update: SessionUpdatePayload): void {
-    const toolCallId = update.toolCallId
+  private startToolCall(event: EventEnvelope, payload: ToolCallPayload): void {
+    const toolCallId = payload.toolCallId
     if (!toolCallId) return
 
-    const target = this.resolveOrCreateMessage('assistant', event)
+    const target = this.resolveOrCreateAssistant(event)
     const part: MessagePart = {
       kind: 'tool_call',
       id: toolCallId,
       content: '',
-      toolName: update.title ?? update.kind ?? 'tool',
-      toolStatus: mapStatus(update.status) ?? 'pending',
+      toolName: payload.title ?? payload.name ?? 'tool',
+      toolStatus: mapStatus(payload.status) ?? 'pending',
     }
     target.parts.push(part)
     this.state.toolCallIndex.set(toolCallId, {
@@ -154,114 +128,77 @@ export class MessageAccumulator {
     })
   }
 
-  private updateToolCall(update: SessionUpdatePayload): void {
-    const toolCallId = update.toolCallId
+  private updateToolCall(payload: ToolCallUpdatePayload): void {
+    const toolCallId = payload.toolCallId
     if (!toolCallId) return
     const coords = this.state.toolCallIndex.get(toolCallId)
     if (!coords) return
-
     const part = this.state.messages[coords.messageIndex]?.parts[coords.partIndex]
     if (!part || part.kind !== 'tool_call') return
 
-    if (update.status) {
-      part.toolStatus = mapStatus(update.status) ?? part.toolStatus
-    }
-    if (update.title) {
-      part.toolName = update.title
-    }
+    if (payload.status) part.toolStatus = mapStatus(payload.status) ?? part.toolStatus
+    if (payload.title) part.toolName = payload.title
   }
 
-  private resolveOrCreateMessage(
-    role: 'user' | 'assistant',
-    event: SessionEvent,
-    messageId?: string,
-  ): Message {
+  private markStreamingDone(): void {
     const last = this.state.messages[this.state.messages.length - 1]
-    const lastMessageIdForRole = this.state.lastMessageIdByRole[role]
+    if (last) last.isStreaming = false
+  }
 
-    const shouldReuse =
+  private resolveOrCreateAssistant(event: EventEnvelope, messageId?: string): Message {
+    const last = this.state.messages[this.state.messages.length - 1]
+    const sameLogicalMessage =
       last &&
-      last.role === role &&
-      (messageId === undefined || messageId === lastMessageIdForRole)
+      last.role === 'assistant' &&
+      (messageId === undefined || messageId === this.state.lastAgentMessageId)
 
-    if (shouldReuse) {
-      if (messageId) this.state.lastMessageIdByRole[role] = messageId
+    if (sameLogicalMessage) {
+      if (messageId) this.state.lastAgentMessageId = messageId
       return last
     }
 
-    // Mark the previous message as no longer streaming.
     if (last) last.isStreaming = false
-
     const created: Message = {
-      id: messageId ?? `${event.sessionId}:${event.eventIndex}`,
-      role,
+      id: messageId ?? `a:${event.eventIndex}`,
+      role: 'assistant',
       parts: [],
       isStreaming: true,
       createdAt: event.createdAt,
     }
     this.state.messages.push(created)
-    if (messageId) this.state.lastMessageIdByRole[role] = messageId
+    if (messageId) this.state.lastAgentMessageId = messageId
     return created
   }
 }
 
-function extractSessionUpdate(event: SessionEvent): SessionUpdatePayload | undefined {
-  const payload = event.payload as { method?: string; params?: unknown } | null
-  if (!payload || typeof payload !== 'object') return undefined
-  if (payload.method !== 'session/update') return undefined
-  const params = payload.params as { update?: SessionUpdatePayload } | undefined
-  return params?.update
+interface UserMessagePayload {
+  kind: 'user_message_chunk'
+  messageId?: string
+  content?: ContentBlock[]
 }
 
-interface ExtractedPrompt {
-  text: string
-  images: Array<{ data: string; mimeType: string }>
+interface AgentChunkPayload {
+  kind: 'agent_message_chunk' | 'agent_thought_chunk'
+  messageId?: string
+  text?: string
 }
 
-// When the SDK resumes a session with stored events, the next session/prompt
-// it sends is prefixed with a synthetic text part starting with this string;
-// Rivet uses it to re-prime the agent's context. Show only the real user text.
-const REPLAY_PREFIX = 'Previous session history is replayed below'
-
-// Return the content of a client-sent `session/prompt` request, or
-// undefined if the event isn't one. Extracts both text and image blocks.
-function extractClientPrompt(event: SessionEvent): ExtractedPrompt | undefined {
-  if (event.sender !== 'client') return undefined
-  const payload = event.payload as { method?: string; params?: unknown } | null
-  if (!payload || typeof payload !== 'object') return undefined
-  if (payload.method !== 'session/prompt') return undefined
-  const params = payload.params as {
-    prompt?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
-  } | undefined
-  const prompt = params?.prompt
-  if (!Array.isArray(prompt)) return undefined
-
-  const text = prompt
-    .filter(
-      (p) =>
-        p.type === 'text' &&
-        typeof p.text === 'string' &&
-        !p.text.startsWith(REPLAY_PREFIX),
-    )
-    .map((p) => p.text!)
-    .join('')
-
-  const images = prompt
-    .filter((p): p is { type: 'image'; data: string; mimeType: string } =>
-      p.type === 'image' && typeof p.data === 'string' && typeof p.mimeType === 'string',
-    )
-    .map((p) => ({ data: p.data, mimeType: p.mimeType }))
-
-  // A prompt that was *only* a replay prefix (no real user text or images)
-  // is an SDK internal signal; don't render it as an empty user bubble.
-  if (!text && images.length === 0) return undefined
-
-  return { text, images }
+interface ToolCallPayload {
+  kind: 'tool_call'
+  toolCallId?: string
+  title?: string
+  name?: string
+  status?: string
 }
 
-function mapStatus(
-  status: string | undefined,
-): MessagePart['toolStatus'] | undefined {
+interface ToolCallUpdatePayload {
+  kind: 'tool_call_update'
+  toolCallId?: string
+  status?: string
+  title?: string
+}
+
+function mapStatus(status: string | undefined): MessagePart['toolStatus'] | undefined {
   if (!status) return undefined
   switch (status) {
     case 'pending':
@@ -270,6 +207,7 @@ function mapStatus(
     case 'running':
       return 'running'
     case 'completed':
+    case 'complete':
     case 'success':
       return 'complete'
     case 'failed':

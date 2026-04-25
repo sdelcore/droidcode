@@ -1,5 +1,5 @@
 // Turn an arbitrary thrown value into a user-visible string, preferring the
-// server's ProblemDetails detail/title when available (sandbox-agent throws
+// server's ProblemDetails detail/title when available (wagent returns
 // AcpHttpError / AcpRpcError with a structured `problem` object).
 
 export function formatError(error: unknown, fallback = 'Something went wrong'): string {

@@ -1,13 +1,13 @@
 import { create } from 'zustand'
-import type { Session, SessionEvent, SessionPermissionRequest, PermissionReply } from 'sandbox-agent'
-import { connectToHost } from '@/services/sandboxAgent/client'
+import type {
+  ContentBlock,
+  EventEnvelope,
+  PermissionOutcome,
+  PermissionRequestPayload,
+  WagentClient,
+} from '@/services/wagent'
+import { connectToHost } from '@/services/wagent'
 import { MessageAccumulator } from '@/services/messaging'
-import { listEvents as companionListEvents, type CompanionEvent } from '@/services/sync/companion'
-import {
-  attachEventMirror,
-  detachEventMirror,
-  enqueueEvent,
-} from '@/services/sync/eventMirror'
 import { requireHost } from './hostStore'
 import { useSessionLiveStore } from './sessionLiveStore'
 import { useSettingsStore } from './settingsStore'
@@ -21,7 +21,7 @@ export interface ChatPaneState {
   status: ChatStatus
   error: string | null
   messages: Message[]
-  pendingPermission: SessionPermissionRequest | null
+  pendingPermission: PermissionRequestPayload | null
   isStreaming: boolean
 }
 
@@ -39,7 +39,7 @@ interface ChatStoreState {
   respondPermission(
     sessionId: string,
     requestId: string,
-    reply: PermissionReply,
+    outcome: PermissionOutcome,
   ): Promise<void>
   runClientSlashCommand(
     sessionId: string,
@@ -50,54 +50,31 @@ interface ChatStoreState {
 interface Attachment {
   hostId: number
   sessionId: string
-  session: Session
+  client: WagentClient
   unsubscribeEvents: () => void
-  unsubscribePermissions: () => void
   accumulator: MessageAccumulator
-  seenEventIds: Set<string>
+  seenIndices: Set<number>
   lastEventIndex: number
   catchUpInFlight: boolean
 }
 
-function companionEventToSdkEvent(e: CompanionEvent): SessionEvent {
-  return {
-    id: e.id,
-    eventIndex: e.eventIndex,
-    sessionId: e.sessionId,
-    createdAt: e.createdAt,
-    connectionId: e.connectionId ?? '',
-    sender: e.sender,
-    payload: e.payload as SessionEvent['payload'],
-  }
-}
-
-// Non-serializable per-session runtime state — kept out of Zustand state.
 const attachments = new Map<string, Attachment>()
 
-// Defensive catch-up: the SDK's SSE connection can go silently stale on
-// mobile (backgrounded tab, sleep, network switch) and we don't get a
-// failure event — we just stop receiving updates. When the window comes
-// back to focus or the browser reports online, ask the companion for
-// everything after our last seen eventIndex and push any gaps through
-// the same handleEvent path. Dedupe is by event id so double-pushes
-// from SSE + poll are safe.
+// Defensive catch-up on focus / online — wagent's SSE keep-alive +
+// Last-Event-ID resume should handle most cases server-side, but this
+// covers the residual silent-stall window on mobile.
 async function catchUpAttachment(a: Attachment): Promise<void> {
   if (a.catchUpInFlight) return
   a.catchUpInFlight = true
   try {
-    const host = await requireHost(a.hostId).catch(() => null)
-    if (!host) return
-    const items = await companionListEvents(host, a.sessionId, {
-      after: a.lastEventIndex,
-      limit: 1000,
-    }).catch(() => [] as CompanionEvent[])
-    if (items.length === 0) return
-    const events = items.map(companionEventToSdkEvent)
-    events.sort((x, y) => x.eventIndex - y.eventIndex)
+    const events = await a.client
+      .listEvents(a.sessionId, { after: a.lastEventIndex, limit: 1000 })
+      .catch(() => [] as EventEnvelope[])
+    if (events.length === 0) return
     let appended = false
     for (const e of events) {
-      if (a.seenEventIds.has(e.id)) continue
-      a.seenEventIds.add(e.id)
+      if (a.seenIndices.has(e.eventIndex)) continue
+      a.seenIndices.add(e.eventIndex)
       if (e.eventIndex > a.lastEventIndex) a.lastEventIndex = e.eventIndex
       a.accumulator.push(e)
       appended = true
@@ -126,17 +103,10 @@ if (typeof window !== 'undefined') {
   window.addEventListener('focus', () => catchUpAll())
 }
 
-function isPermissionNotFound(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  return /permission .*not found/i.test(error.message)
-}
-
 function detach(sessionId: string): void {
   const a = attachments.get(sessionId)
   if (!a) return
   a.unsubscribeEvents()
-  a.unsubscribePermissions()
-  detachEventMirror(a.hostId, sessionId)
   attachments.delete(sessionId)
 }
 
@@ -169,11 +139,13 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
   byId: {},
 
   async openSession(hostId, sessionId) {
-    // Idempotent: if already attached, just ensure state is present.
     if (attachments.has(sessionId)) {
       if (!get().byId[sessionId]) {
         set((state) => ({
-          byId: { ...state.byId, [sessionId]: { ...initialState(hostId, sessionId), status: 'connected' } },
+          byId: {
+            ...state.byId,
+            [sessionId]: { ...initialState(hostId, sessionId), status: 'connected' },
+          },
         }))
       }
       return
@@ -185,86 +157,73 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
 
     try {
       const host = await requireHost(hostId)
-      const sdk = await connectToHost(host)
-      const session = await sdk.resumeSession(sessionId)
+      const client = connectToHost(host)
 
       const accumulator = new MessageAccumulator()
-      const seenEventIds = new Set<string>()
+      const seenIndices = new Set<number>()
       let lastEventIndex = 0
 
-      // Collect history from both sides: SDK's local persist (might have
-      // stuff the companion doesn't yet) + companion server (authoritative
-      // cross-device view). Dedupe by id and replay in eventIndex order
-      // so tool calls and text chunks interleave correctly.
-      const [localHistory, remoteHistory] = await Promise.all([
-        sdk.getEvents({ sessionId, limit: 1000 }).catch(() => ({ items: [] as SessionEvent[] })),
-        companionListEvents(host, sessionId, { limit: 2000 })
-          .then((items) => items.map(companionEventToSdkEvent))
-          .catch(() => [] as SessionEvent[]),
-      ])
-      const merged: SessionEvent[] = []
-      for (const e of [...localHistory.items, ...remoteHistory]) {
-        if (seenEventIds.has(e.id)) continue
-        seenEventIds.add(e.id)
-        merged.push(e)
-      }
-      merged.sort((a, b) => a.eventIndex - b.eventIndex)
-      for (const e of merged) {
-        accumulator.push(e)
+      // Backfill from server before subscribing live so SSE replay
+      // doesn't double up via Last-Event-ID racing the listEvents call.
+      const history = await client.listEvents(sessionId, { limit: 2000 }).catch(() => [])
+      history.sort((a, b) => a.eventIndex - b.eventIndex)
+      for (const e of history) {
+        seenIndices.add(e.eventIndex)
         if (e.eventIndex > lastEventIndex) lastEventIndex = e.eventIndex
+        accumulator.push(e)
       }
 
-      attachEventMirror(host, sessionId)
-      // Backfill: push any history events the companion didn't already
-      // have so the other browsers eventually see them too.
-      for (const e of merged) enqueueEvent(host.id, sessionId, e)
-
-      const handleEvent = (event: SessionEvent) => {
-        if (seenEventIds.has(event.id)) return
-        seenEventIds.add(event.id)
+      const handleEvent = (event: EventEnvelope) => {
+        if (seenIndices.has(event.eventIndex)) return
+        seenIndices.add(event.eventIndex)
         if (event.eventIndex > lastEventIndex) lastEventIndex = event.eventIndex
         const a = attachments.get(sessionId)
         if (a) a.lastEventIndex = lastEventIndex
+
+        // Top-level chatStore reactions to specific event kinds.
+        switch (event.payload.kind) {
+          case 'permission_request':
+            handlePermissionRequest(client, sessionId, event.payload as unknown as PermissionRequestPayload)
+            break
+          case 'permission_resolved':
+            // Clear banner if it matches this requestId.
+            set((state) => {
+              const current = state.byId[sessionId]
+              const reqId = (event.payload as { requestId?: string }).requestId
+              if (current?.pendingPermission?.requestId === reqId) {
+                return patch(state, sessionId, { pendingPermission: null })
+              }
+              return state
+            })
+            useSessionLiveStore.getState().clearPendingPermission(sessionId)
+            break
+          case 'stop':
+            set((state) => patch(state, sessionId, { isStreaming: false }))
+            break
+          case 'session_destroyed':
+            // Server says session is gone — close the attachment.
+            detach(sessionId)
+            return
+          default:
+            break
+        }
+
         accumulator.push(event)
-        enqueueEvent(host.id, sessionId, event)
         set((state) => patch(state, sessionId, { messages: [...accumulator.messages] }))
       }
-      const handlePermission = (req: SessionPermissionRequest) => {
-        const autoAccept = useSettingsStore.getState().autoAcceptPermissions
-        if (autoAccept) {
-          const preferred: PermissionReply[] = ['always', 'once', 'reject']
-          const reply = preferred.find((r) => req.availableReplies.includes(r))
-          if (reply && reply !== 'reject') {
-            session.respondPermission(req.id, reply).then(
-              () => {
-                useSessionLiveStore.getState().clearPendingPermission(sessionId)
-              },
-              (err) => {
-                if (isPermissionNotFound(err)) {
-                  useSessionLiveStore.getState().clearPendingPermission(sessionId)
-                  return
-                }
-                console.error('auto-accept permission failed', err)
-                set((state) => patch(state, sessionId, { pendingPermission: req }))
-              },
-            )
-            return
-          }
-        }
-        set((state) => patch(state, sessionId, { pendingPermission: req }))
-      }
 
-      const unsubscribeEvents = session.onEvent(handleEvent)
-      const unsubscribePermissions = session.onPermissionRequest(handlePermission)
+      // Subscribe AFTER backfill so duplicates use the seenIndices guard.
+      const unsubscribe = client.subscribeEvents(sessionId, handleEvent, {
+        lastEventId: lastEventIndex > 0 ? lastEventIndex : undefined,
+      })
 
       attachments.set(sessionId, {
         hostId,
         sessionId,
-        session,
-        unsubscribeEvents,
-        unsubscribePermissions,
+        client,
+        unsubscribeEvents: unsubscribe,
         accumulator,
-        seenEventIds,
+        seenIndices,
         lastEventIndex,
         catchUpInFlight: false,
       })
@@ -300,23 +259,23 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
     if (!a) throw new Error('No active session')
     set((state) => patch(state, sessionId, { isStreaming: true, error: null }))
     try {
-      const contentBlocks: Array<{ type: string; [key: string]: unknown }> = []
+      const content: ContentBlock[] = []
       if (images?.length) {
         for (const img of images) {
           const base64 = img.dataUrl.replace(/^data:[^;]+;base64,/, '')
-          contentBlocks.push({ type: 'image', data: base64, mimeType: img.mimeType })
+          content.push({ type: 'image', data: base64, mimeType: img.mimeType })
         }
       }
-      contentBlocks.push({ type: 'text', text })
-      await a.session.prompt(contentBlocks as Array<{ type: 'text'; text: string }>)
+      if (text) content.push({ type: 'text', text })
+      if (content.length === 0) return
+      await a.client.sendMessage(sessionId, content)
     } catch (error) {
       set((state) =>
         patch(state, sessionId, {
           error: error instanceof Error ? error.message : 'Prompt failed',
+          isStreaming: false,
         }),
       )
-    } finally {
-      set((state) => patch(state, sessionId, { isStreaming: false }))
     }
   },
 
@@ -324,7 +283,7 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
     const a = attachments.get(sessionId)
     if (!a) return
     try {
-      await a.session.rawSend('session/cancel', {})
+      await a.client.abort(sessionId)
     } catch (error) {
       set((state) =>
         patch(state, sessionId, {
@@ -334,13 +293,13 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
     }
   },
 
-  async respondPermission(sessionId, requestId, reply) {
+  async respondPermission(sessionId, requestId, outcome) {
     const a = attachments.get(sessionId)
     if (!a) return
     const clearBanner = () => {
       set((state) => {
         const current = state.byId[sessionId]
-        if (current?.pendingPermission?.id === requestId) {
+        if (current?.pendingPermission?.requestId === requestId) {
           return patch(state, sessionId, { pendingPermission: null })
         }
         return state
@@ -348,13 +307,11 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       useSessionLiveStore.getState().clearPendingPermission(sessionId)
     }
     try {
-      await a.session.respondPermission(requestId, reply)
+      await a.client.respondPermission(sessionId, requestId, outcome)
       clearBanner()
     } catch (error) {
-      if (isPermissionNotFound(error)) {
-        clearBanner()
-        return
-      }
+      // wagent dedupes server-side and returns 200 on already-consumed
+      // request ids; this catch is for actual transport errors.
       set((state) =>
         patch(state, sessionId, {
           error: error instanceof Error ? error.message : 'Permission reply failed',
@@ -379,7 +336,7 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
       case 'redo':
         return {
           handled: true,
-          message: `/${name} is deferred in v1 (Rivet SDK does not expose revert yet).`,
+          message: `/${name} is deferred in v1 (no revert primitive yet).`,
         }
       default:
         return { handled: false }
@@ -387,7 +344,25 @@ export const useChatStore = create<ChatStoreState>()((set, get) => ({
   },
 }))
 
-// Convenience selector hooks for the common case of "just give me this pane".
+function handlePermissionRequest(
+  client: WagentClient,
+  sessionId: string,
+  req: PermissionRequestPayload,
+): void {
+  const autoAccept = useSettingsStore.getState().autoAcceptPermissions
+  if (autoAccept) {
+    const preferred: PermissionOutcome[] = ['allow_always', 'allow_once', 'reject']
+    const outcome = preferred.find((o) => req.availableOutcomes?.includes(o))
+    if (outcome && outcome !== 'reject') {
+      client.respondPermission(sessionId, req.requestId, outcome).catch(() => {
+        // Idempotent server-side — non-fatal.
+      })
+      return
+    }
+  }
+  useChatStore.setState((state) => patch(state, sessionId, { pendingPermission: req }))
+}
+
 export function useChatPane(sessionId: string | undefined): ChatPaneState | undefined {
   return useChatStore((s) => (sessionId ? s.byId[sessionId] : undefined))
 }

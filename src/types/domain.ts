@@ -1,7 +1,7 @@
-import type { SessionRecord } from 'sandbox-agent'
+import type { Session } from '@/services/wagent'
 
 // ============================================================================
-// Host — a Rivet sandbox-agent daemon the user wants to connect to.
+// Host — a wagent endpoint the user wants to connect to.
 // ============================================================================
 
 export interface Host {
@@ -11,13 +11,12 @@ export interface Host {
   port: number
   isSecure: boolean
   token?: string
-  // Base URL of the droidcode-server companion. If unset, we assume it
-  // runs at the same host with port 2469.
-  companionUrl?: string
-  // If set, sent as Bearer auth to the companion. Optional.
-  companionToken?: string
   lastConnected?: number
   createdAt: number
+  // Legacy fields kept on the type so existing Dexie rows decode cleanly;
+  // unused after the wagent migration.
+  companionUrl?: string
+  companionToken?: string
 }
 
 // ============================================================================
@@ -228,6 +227,6 @@ export interface MessageGroup {
 // ============================================================================
 
 export interface SessionWithPrefs {
-  session: SessionRecord
+  session: Session
   prefs?: SessionPreferences
 }

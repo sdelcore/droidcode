@@ -1,10 +1,9 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import type { SessionCreateRequest, SessionRecord } from 'sandbox-agent'
-import { connectToHost } from '@/services/sandboxAgent/client'
+import type { AgentKind, Session } from '@/services/wagent'
+import { connectToHost } from '@/services/wagent'
 import { requireHost, useHostStore, waitForHosts } from './hostStore'
 import { useChatStore } from './chatStore'
-import { useMetadataStore } from './metadataStore'
 import { idbStorage } from './idbStorage'
 import {
   DEFAULT_SESSION_FILTERS,
@@ -15,31 +14,33 @@ import {
   type SortPreset,
 } from '@/types'
 
+export interface SessionCreateInput {
+  agent: AgentKind
+  cwd: string
+  alias?: string | null
+  model?: string | null
+}
+
 interface SessionStoreState {
-  byHost: Record<number, SessionRecord[]>
+  byHost: Record<number, Session[]>
   isLoading: boolean
   error: string | null
   filters: SessionFilters
 
   loadForHost(hostId: number): Promise<void>
   loadAllHosts(): Promise<void>
-  createSession(hostId: number, request: SessionCreateRequest): Promise<SessionRecord>
+  createSession(hostId: number, input: SessionCreateInput): Promise<Session>
   destroySession(hostId: number, sessionId: string): Promise<void>
+  patchSession(hostId: number, sessionId: string, patch: { alias?: string | null; model?: string | null }): Promise<Session>
   setFilters(next: Partial<SessionFilters>): void
   setSortPreset(preset: SortPreset): void
   clearFilters(): void
 }
 
-async function listRecordsForHost(hostId: number): Promise<SessionRecord[]> {
+async function listForHost(hostId: number): Promise<Session[]> {
   const host = await requireHost(hostId)
-  const sdk = await connectToHost(host)
-  const page = await sdk.listSessions({ limit: 200 })
-  // The SDK's persist driver keeps destroyed sessions (destroyedAt set)
-  // indefinitely and doesn't expose a delete primitive. Filter them out
-  // client-side so the dashboard matches user expectations after deletes.
-  return page.items
-    .map((s) => s.toRecord())
-    .filter((r) => !r.destroyedAt)
+  const client = connectToHost(host)
+  return client.listSessions({ includeDestroyed: false })
 }
 
 export const useSessionStore = create<SessionStoreState>()(
@@ -53,11 +54,8 @@ export const useSessionStore = create<SessionStoreState>()(
       async loadForHost(hostId) {
         set({ isLoading: true, error: null })
         try {
-          const items = await listRecordsForHost(hostId)
-          set({
-            byHost: { ...get().byHost, [hostId]: items },
-            isLoading: false,
-          })
+          const items = await listForHost(hostId)
+          set({ byHost: { ...get().byHost, [hostId]: items }, isLoading: false })
         } catch (error) {
           set({
             error: error instanceof Error ? error.message : 'Failed to load sessions',
@@ -71,9 +69,9 @@ export const useSessionStore = create<SessionStoreState>()(
         await waitForHosts()
         const hosts = useHostStore.getState().hosts
         const entries = await Promise.allSettled(
-          hosts.map(async (h) => [h.id, await listRecordsForHost(h.id)] as const),
+          hosts.map(async (h) => [h.id, await listForHost(h.id)] as const),
         )
-        const next: Record<number, SessionRecord[]> = { ...get().byHost }
+        const next: Record<number, Session[]> = { ...get().byHost }
         const failures: string[] = []
         for (let i = 0; i < entries.length; i++) {
           const entry = entries[i]
@@ -92,36 +90,21 @@ export const useSessionStore = create<SessionStoreState>()(
         })
       },
 
-      async createSession(hostId, request) {
+      async createSession(hostId, input) {
         const host = await requireHost(hostId)
-        const sdk = await connectToHost(host)
-        const session = await sdk.createSession(request)
-        const record = session.toRecord()
+        const client = connectToHost(host)
+        const session = await client.createSession(input)
         const list = get().byHost[hostId] ?? []
-        set({
-          byHost: { ...get().byHost, [hostId]: [record, ...list] },
-        })
-        // Snapshot this session into the daemon-side metadata file so other
-        // browsers/devices pointed at the same daemon can resume it without
-        // having watched its creation.
-        useMetadataStore.getState().upsertSession(hostId, {
-          id: record.id,
-          agent: record.agent,
-          agentSessionId: record.agentSessionId,
-          lastConnectionId: record.lastConnectionId,
-          sessionInit: record.sessionInit,
-          createdAt: record.createdAt,
-        })
-        return record
+        set({ byHost: { ...get().byHost, [hostId]: [session, ...list] } })
+        return session
       },
 
       async destroySession(hostId, sessionId) {
         const host = await requireHost(hostId)
-        const sdk = await connectToHost(host)
-        await sdk.destroySession(sessionId)
+        const client = connectToHost(host)
+        await client.deleteSession(sessionId)
         // Chat attachments are app-scoped (see ChatPane). Destroying the
-        // session is the authoritative signal to tear one down; otherwise
-        // the SSE subscription and event mirror would leak.
+        // session is the authoritative signal to tear one down.
         useChatStore.getState().closeSession(sessionId)
         const list = get().byHost[hostId] ?? []
         set({
@@ -130,17 +113,28 @@ export const useSessionStore = create<SessionStoreState>()(
             [hostId]: list.filter((s) => s.id !== sessionId),
           },
         })
-        useMetadataStore.getState().removeSession(hostId, sessionId)
+      },
+
+      async patchSession(hostId, sessionId, patch) {
+        const host = await requireHost(hostId)
+        const client = connectToHost(host)
+        const updated = await client.patchSession(sessionId, patch)
+        const list = get().byHost[hostId] ?? []
+        set({
+          byHost: {
+            ...get().byHost,
+            [hostId]: list.map((s) => (s.id === sessionId ? updated : s)),
+          },
+        })
+        return updated
       },
 
       setFilters(next) {
         set({ filters: { ...get().filters, ...next } })
       },
-
       setSortPreset(preset) {
         set({ filters: { ...get().filters, sortPreset: preset } })
       },
-
       clearFilters() {
         set({ filters: DEFAULT_SESSION_FILTERS })
       },

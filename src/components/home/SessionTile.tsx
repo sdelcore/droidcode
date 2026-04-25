@@ -163,7 +163,7 @@ export function SessionTile({
               </span>
             )}
           </div>
-          <span>{formatRelative(lastActivity, session.destroyedAt)}</span>
+          <span>{formatRelative(lastActivity, session.destroyedAt ?? undefined)}</span>
         </div>
       </CardContent>
     </Card>

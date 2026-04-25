@@ -6,9 +6,6 @@ import { Button } from '@/components/ui/button'
 import { useHostStore } from '@/stores/hostStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSessionLiveStore } from '@/stores/sessionLiveStore'
-import { sessionPreferencesRepository } from '@/services/db'
-import { useMetadataStore } from '@/stores/metadataStore'
-import type { SessionPreferences } from '@/types'
 import {
   applyHomeFilters,
   applyHomeSort,
@@ -42,7 +39,6 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
   const watch = useSessionLiveStore((s) => s.watch)
   const unwatch = useSessionLiveStore((s) => s.unwatch)
 
-  const [prefs, setPrefs] = useState<Record<string, SessionPreferences>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionActive, setSelectionActive] = useState(false)
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -50,25 +46,6 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
   useEffect(() => {
     if (hostsLoaded) loadAllHosts()
   }, [hostsLoaded, loadAllHosts])
-
-  // Load aliases for every host in parallel. Called once after hosts arrive.
-  useEffect(() => {
-    let cancelled = false
-    if (hosts.length === 0) return
-    Promise.all(hosts.map((h) => sessionPreferencesRepository.getByHost(h.id))).then(
-      (results) => {
-        if (cancelled) return
-        const merged: Record<string, SessionPreferences> = {}
-        for (const rows of results) {
-          for (const p of rows) merged[p.sessionId] = p
-        }
-        setPrefs(merged)
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [hosts])
 
   const filters = useMemo<HomeFilterState>(() => {
     const parsed = parseHomeSearch(search)
@@ -96,8 +73,8 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
   }, [navigate])
 
   const flat = useMemo<FlatSession[]>(
-    () => buildFlatSessions({ byHost, hosts, prefs }),
-    [byHost, hosts, prefs],
+    () => buildFlatSessions({ byHost, hosts }),
+    [byHost, hosts],
   )
 
   const hostFacetOpts = useMemo(() => buildHostFacets(flat, hosts), [flat, hosts])
@@ -187,17 +164,13 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
     const next = window.prompt('Rename session', f.alias ?? '')
     if (next === null) return
     const trimmed = next.trim()
-    const pref: SessionPreferences = {
-      sessionId: f.session.id,
-      hostId: f.hostId,
-      alias: trimmed || undefined,
+    try {
+      await useSessionStore
+        .getState()
+        .patchSession(f.hostId, f.session.id, { alias: trimmed || null })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Rename failed')
     }
-    await sessionPreferencesRepository.save(pref)
-    setPrefs((p) => ({ ...p, [f.session.id]: pref }))
-    useMetadataStore.getState().upsertSession(f.hostId, {
-      id: f.session.id,
-      alias: trimmed || undefined,
-    })
   }
 
   async function handleDestroy(f: FlatSession) {

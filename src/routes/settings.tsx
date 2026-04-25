@@ -95,7 +95,7 @@ function Settings() {
             <span className="font-mono">{__APP_VERSION__}</span>
           </p>
           <p className="text-xs text-muted-foreground">
-            DroidCode · Rivet sandbox-agent client
+            DroidCode · wagent client
           </p>
         </CardContent>
       </Card>

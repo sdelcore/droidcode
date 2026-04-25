@@ -1,32 +1,34 @@
-import type { SessionRecord } from 'sandbox-agent'
+import type { Session } from '@/services/wagent'
 import type { SessionFilters, SessionPreferences, SortPreset } from '@/types'
 import { getWorkflowPriority } from '@/types'
 
-export function sessionMode(s: SessionRecord): string | undefined {
-  return s.modes?.currentModeId ?? undefined
+// Mode is no longer carried on Session in v1 (Rivet's modes.currentModeId
+// went away). Keeping the helper so callers don't have to change yet.
+export function sessionMode(_session: Session): string | undefined {
+  void _session
+  return undefined
 }
 
-export function isSessionRunning(s: SessionRecord): boolean {
-  return s.destroyedAt === undefined || s.destroyedAt === null
+export function isSessionRunning(s: Session): boolean {
+  return s.destroyedAt === null
 }
 
-export function sessionCwd(s: SessionRecord): string | undefined {
-  const init = s.sessionInit as { cwd?: string } | undefined
-  return init?.cwd
+export function sessionCwd(s: Session): string | undefined {
+  return s.cwd ?? undefined
 }
 
-export function sessionDisplayName(
-  s: SessionRecord,
-  prefs?: SessionPreferences,
-): string {
-  return prefs?.alias || s.id
+export function sessionDisplayName(s: Session, prefs?: SessionPreferences): string {
+  // Prefer the local pref alias (legacy), then the server-side alias on
+  // the Session row, then the id. Once all sessions are wagent-native this
+  // collapses to s.alias || s.id.
+  return prefs?.alias || s.alias || s.id
 }
 
 export function applyFilters(
-  sessions: SessionRecord[],
+  sessions: Session[],
   filters: SessionFilters,
   options: { cwd?: string } = {},
-): SessionRecord[] {
+): Session[] {
   return sessions.filter((s) => {
     if (options.cwd && sessionCwd(s) !== options.cwd) return false
 
@@ -46,10 +48,10 @@ export function applyFilters(
 }
 
 export function applySort(
-  sessions: SessionRecord[],
+  sessions: Session[],
   preset: SortPreset,
   prefsBySessionId: Record<string, SessionPreferences | undefined> = {},
-): SessionRecord[] {
+): Session[] {
   const copy = sessions.slice()
 
   switch (preset) {
@@ -78,8 +80,6 @@ export function applySort(
       )
       break
     case 'files':
-      // Per-session file counts come from event payload analysis,
-      // which is out of scope for the session list; fall back to recent.
       copy.sort((a, b) => latestActivity(b) - latestActivity(a))
       break
   }
@@ -87,11 +87,11 @@ export function applySort(
   return copy
 }
 
-function latestActivity(s: SessionRecord): number {
-  return s.destroyedAt ?? s.createdAt
+function latestActivity(s: Session): number {
+  return s.destroyedAt ?? s.updatedAt ?? s.createdAt
 }
 
-function duration(s: SessionRecord): number {
+function duration(s: Session): number {
   if (s.destroyedAt) return s.destroyedAt - s.createdAt
   return Date.now() - s.createdAt
 }

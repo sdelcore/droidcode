@@ -12,7 +12,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { sessionPreferencesRepository } from '@/services/db'
 import { useChatStore, useHostStore, useSessionStore, useVisibilityStore } from '@/stores'
 
 interface ChatPaneProps {
@@ -37,10 +36,11 @@ export function ChatPane({
   const openSession = useChatStore((s) => s.openSession)
   const pane = useChatStore((s) => s.byId[sessionId])
   const destroySession = useSessionStore((s) => s.destroySession)
+  const session = useSessionStore((s) => s.byHost[hostId]?.find((row) => row.id === sessionId))
+  const alias = session?.alias ?? undefined
   const setActiveSession = useVisibilityStore((s) => s.setActiveSession)
 
   const [draft, setDraft] = useState('')
-  const [alias, setAlias] = useState<string | undefined>(undefined)
   const scrollAnchorRef = useRef<HTMLDivElement>(null)
 
   const status = pane?.status ?? 'idle'
@@ -66,16 +66,6 @@ export function ChatPane({
     if (!isActive) return
     setActiveSession(hostId, sessionId)
   }, [isActive, hostId, sessionId, setActiveSession])
-
-  useEffect(() => {
-    let cancelled = false
-    sessionPreferencesRepository.get(sessionId).then((prefs) => {
-      if (!cancelled) setAlias(prefs?.alias)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId])
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })

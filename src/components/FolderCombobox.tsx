@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, FolderOpen, Loader2, Pin } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { listFsEntries, type FsEntry } from '@/services/sandboxAgent/fs'
+import { connectToHost, type FsEntry } from '@/services/wagent'
 import type { Host, ProjectFolder } from '@/types'
 
 interface FolderComboboxProps {
@@ -99,7 +99,8 @@ function FolderDropdown({ host, value, rememberedFolders, onPick }: FolderDropdo
   useEffect(() => {
     if (!host) return
     let cancelled = false
-    listFsEntries(host, currentPath)
+    connectToHost(host)
+      .listFsEntries(currentPath)
       .then((rows) => {
         if (cancelled) return
         setState({

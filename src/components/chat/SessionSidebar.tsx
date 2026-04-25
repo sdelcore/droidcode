@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FilePlus2, Plus, X } from 'lucide-react'
-import type { SessionRecord } from 'sandbox-agent'
+import type { Session } from '@/services/wagent'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
 import { useSessionStore } from '@/stores'
 import { useLiveStatus, useSessionLiveStore } from '@/stores/sessionLiveStore'
@@ -10,8 +10,6 @@ import {
   sessionDisplayName,
   sessionMode,
 } from '@/services/sessions/sortAndFilter'
-import { sessionPreferencesRepository } from '@/services/db'
-import type { SessionPreferences } from '@/types'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +26,7 @@ interface SessionSidebarProps {
   onRemovePane(sessionId: string): void
 }
 
-const EMPTY_SESSIONS: SessionRecord[] = []
+const EMPTY_SESSIONS: Session[] = []
 
 export function SessionSidebar({
   hostId,
@@ -45,17 +43,11 @@ export function SessionSidebar({
   const watch = useSessionLiveStore((s) => s.watch)
   const unwatch = useSessionLiveStore((s) => s.unwatch)
 
-  const [prefs, setPrefs] = useState<Record<string, SessionPreferences>>({})
   const [query, setQuery] = useState('')
   const [newSessionOpen, setNewSessionOpen] = useState(false)
 
   useEffect(() => {
     loadForHost(hostId)
-    sessionPreferencesRepository.getByHost(hostId).then((rows) => {
-      const byId: Record<string, SessionPreferences> = {}
-      for (const p of rows) byId[p.sessionId] = p
-      setPrefs(byId)
-    })
   }, [hostId, loadForHost])
 
   const paneSet = useMemo(() => new Set(panes), [panes])
@@ -65,7 +57,7 @@ export function SessionSidebar({
     return sessions
       .filter((s) => {
         if (!q) return true
-        const alias = prefs[s.id]?.alias?.toLowerCase() ?? ''
+        const alias = s.alias?.toLowerCase() ?? ''
         const cwd = sessionCwd(s)?.toLowerCase() ?? ''
         return (
           alias.includes(q) ||
@@ -75,7 +67,7 @@ export function SessionSidebar({
         )
       })
       .sort((a, b) => (b.destroyedAt ?? b.createdAt) - (a.destroyedAt ?? a.createdAt))
-  }, [sessions, query, prefs])
+  }, [sessions, query])
 
   // Subscribe to live status for every visible session in the sidebar so
   // dots / waiting indicators update without opening each chat.
@@ -123,7 +115,7 @@ export function SessionSidebar({
             <SidebarRow
               key={record.id}
               record={record}
-              alias={prefs[record.id]?.alias}
+              alias={record.alias ?? undefined}
               inView={paneSet.has(record.id)}
               isPrimary={record.id === primarySessionId}
               canAdd={!paneSet.has(record.id) && panes.length < 3}
@@ -140,7 +132,7 @@ export function SessionSidebar({
 }
 
 interface SidebarRowProps {
-  record: SessionRecord
+  record: Session
   alias?: string
   inView: boolean
   isPrimary: boolean

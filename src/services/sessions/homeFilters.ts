@@ -1,5 +1,5 @@
-import type { SessionRecord } from 'sandbox-agent'
-import type { Host, SessionPreferences, SortPreset } from '@/types'
+import type { Session } from '@/services/wagent'
+import type { Host, SortPreset } from '@/types'
 import { isSessionRunning, sessionCwd, sessionDisplayName } from './sortAndFilter'
 
 export type HomeStatus = 'running' | 'completed'
@@ -106,7 +106,7 @@ function parseStatusSet(value?: string): Set<HomeStatus> {
 // host context alongside the raw SDK record, so the grid can render a
 // host pill + project label without needing extra lookups.
 export interface FlatSession {
-  session: SessionRecord
+  session: Session
   hostId: number
   hostName: string
   alias?: string
@@ -115,15 +115,13 @@ export interface FlatSession {
 }
 
 export interface BuildFlatSessionsInput {
-  byHost: Record<number, SessionRecord[]>
+  byHost: Record<number, Session[]>
   hosts: Host[]
-  prefs: Record<string, SessionPreferences>
 }
 
 export function buildFlatSessions({
   byHost,
   hosts,
-  prefs,
 }: BuildFlatSessionsInput): FlatSession[] {
   const out: FlatSession[] = []
   for (const host of hosts) {
@@ -134,7 +132,7 @@ export function buildFlatSessions({
         session: record,
         hostId: host.id,
         hostName: host.name,
-        alias: prefs[record.id]?.alias,
+        alias: record.alias ?? undefined,
         cwd,
         projectKey: cwd ?? '',
       })

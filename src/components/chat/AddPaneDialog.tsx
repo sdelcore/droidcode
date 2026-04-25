@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { SessionRecord } from 'sandbox-agent'
-import { sessionPreferencesRepository } from '@/services/db'
+import type { Session } from '@/services/wagent'
 import { useSessionStore } from '@/stores'
 import {
   isSessionRunning,
@@ -8,7 +7,6 @@ import {
   sessionDisplayName,
   sessionMode,
 } from '@/services/sessions/sortAndFilter'
-import type { SessionPreferences } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -27,7 +25,7 @@ interface AddPaneDialogProps {
   onSelect(sessionId: string): void
 }
 
-const EMPTY_SESSIONS: SessionRecord[] = []
+const EMPTY_SESSIONS: Session[] = []
 
 export function AddPaneDialog({
   hostId,
@@ -38,17 +36,11 @@ export function AddPaneDialog({
 }: AddPaneDialogProps) {
   const sessions = useSessionStore((s) => s.byHost[hostId] ?? EMPTY_SESSIONS)
   const loadForHost = useSessionStore((s) => s.loadForHost)
-  const [prefs, setPrefs] = useState<Record<string, SessionPreferences>>({})
   const [query, setQuery] = useState('')
 
   useEffect(() => {
     if (!open) return
     loadForHost(hostId)
-    sessionPreferencesRepository.getByHost(hostId).then((rows) => {
-      const byId: Record<string, SessionPreferences> = {}
-      for (const p of rows) byId[p.sessionId] = p
-      setPrefs(byId)
-    })
   }, [open, hostId, loadForHost])
 
   const excluded = useMemo(() => new Set(excludeSessionIds), [excludeSessionIds])
@@ -59,7 +51,7 @@ export function AddPaneDialog({
       .filter((s) => !excluded.has(s.id))
       .filter((s) => {
         if (!q) return true
-        const alias = prefs[s.id]?.alias?.toLowerCase() ?? ''
+        const alias = s.alias?.toLowerCase() ?? ''
         const cwd = sessionCwd(s)?.toLowerCase() ?? ''
         return (
           alias.includes(q) ||
@@ -70,7 +62,7 @@ export function AddPaneDialog({
       })
       .sort((a, b) => (b.destroyedAt ?? b.createdAt) - (a.destroyedAt ?? a.createdAt))
       .slice(0, 50)
-  }, [sessions, excluded, query, prefs])
+  }, [sessions, excluded, query])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -97,7 +89,7 @@ export function AddPaneDialog({
                 <SessionRow
                   key={s.id}
                   record={s}
-                  alias={prefs[s.id]?.alias}
+                  alias={s.alias ?? undefined}
                   onClick={() => {
                     onSelect(s.id)
                     onOpenChange(false)
@@ -117,7 +109,7 @@ function SessionRow({
   alias,
   onClick,
 }: {
-  record: SessionRecord
+  record: Session
   alias?: string
   onClick: () => void
 }) {

@@ -1,13 +1,12 @@
 {
-  description = "DroidCode - web-first client for Rivet sandbox-agent (Vite + Tauri 2)";
+  description = "DroidCode - web client for the wagent daemon (Vite + Tauri 2)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    wagent.url = "github:sdelcore/wagent";
   };
 
-  outputs = { self, nixpkgs, flake-utils, wagent }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -73,9 +72,8 @@
           ];
 
           buildInputs = (with pkgs; [
-            # Web toolchain
+            # Web toolchain (npm ships with nodejs_22)
             nodejs_22
-            nodePackages.npm
 
             # Tauri toolchain
             rustc
@@ -89,12 +87,7 @@
             androidSdk
             jdk17
             gradle
-          ]) ++ tauriBuildInputs ++ [
-            # Rivet sandbox-agent daemon — pinned via the wagent flake.
-            # Companion server spawns this as a child on startup so the app
-            # ships with a working local host out of the box.
-            wagent.packages.${system}.sandbox-agent
-          ];
+          ]) ++ tauriBuildInputs;
 
           shellHook = ''
             export ANDROID_HOME="${androidSdk}/libexec/android-sdk"
@@ -117,7 +110,8 @@
             echo "  Web:      npm run dev"
             echo "  Tauri:    cargo tauri dev"
             echo "  Build:    npm run build && cargo tauri build"
-            echo "  Server:   cd server && npm run start"
+            echo ""
+            echo "  wagent daemon lives in ~/src/wagent — start separately."
             echo ""
           '';
         };

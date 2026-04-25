@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Check, ChevronRight, FolderSearch, Plus, Server } from 'lucide-react'
-import type { AgentInfo } from 'sandbox-agent'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,16 +14,16 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Switch } from '@/components/ui/switch'
 import { FolderCombobox } from '@/components/FolderCombobox'
 import { useConfigStore, useHostStore, useSessionStore } from '@/stores'
-import { useMetadataStore } from '@/stores/metadataStore'
-import { projectRepository, sessionPreferencesRepository } from '@/services/db'
-import { fetchHealth, hostBaseUrl } from '@/services/sandboxAgent/client'
+import { projectRepository } from '@/services/db'
 import {
-  companionBaseUrl,
-  fetchBootstrapMeta,
-} from '@/services/sync/companion'
+  fetchHealth,
+  wagentBaseUrl as hostBaseUrl,
+  connectToHost,
+  type AgentAvailability,
+  type AgentKind,
+} from '@/services/wagent'
 import { formatError } from '@/services/errors/formatError'
-import { sessionCwd } from '@/services/sessions/sortAndFilter'
-import type { ProjectFolder, SessionPreferences } from '@/types'
+import type { ProjectFolder } from '@/types'
 
 interface NewSessionDialogProps {
   open: boolean
@@ -34,16 +33,13 @@ interface NewSessionDialogProps {
   initialCwd?: string
 }
 
-const EMPTY_AGENTS: AgentInfo[] = []
+const EMPTY_AGENTS: AgentAvailability[] = []
 
 function folderBasename(path: string): string {
   return path.replace(/\/+$/, '').split('/').pop() || 'session'
 }
 
 function suggestAlias(path: string): string {
-  // Shown in the placeholder so the user sees what the default will be
-  // if they leave the alias blank. The real uniqueness check happens at
-  // submit time in computeDefaultAlias.
   return folderBasename(path.trim())
 }
 
@@ -51,22 +47,13 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-async function computeDefaultAlias(hostId: number, folderPath: string): Promise<string> {
+function computeDefaultAlias(hostId: number, folderPath: string): string {
   const basename = folderBasename(folderPath)
-  const [prefs, sessions] = [
-    await sessionPreferencesRepository.getByHost(hostId),
-    useSessionStore.getState().byHost[hostId] ?? [],
-  ]
-  const sessionIdsInFolder = new Set(
-    sessions.filter((s) => sessionCwd(s) === folderPath).map((s) => s.id),
-  )
+  const sessions = useSessionStore.getState().byHost[hostId] ?? []
   const used = new Set<string>(
-    prefs
-      .filter(
-        (p: SessionPreferences) =>
-          p.alias && p.alias.length > 0 && sessionIdsInFolder.has(p.sessionId),
-      )
-      .map((p) => p.alias as string),
+    sessions
+      .filter((s) => s.cwd === folderPath && s.alias && s.alias.length > 0)
+      .map((s) => s.alias as string),
   )
   if (!used.has(basename)) return basename
   const pattern = new RegExp(`^${escapeRegex(basename)}-(\\d+)$`)
@@ -196,14 +183,19 @@ function NewSessionForm({
       return
     }
     let cancelled = false
-    fetchBootstrapMeta(companionBaseUrl(host)).then((meta) => {
-      if (cancelled) return
-      const home = meta?.home
-      if (!home) return
-      homeByHost.current.set(hostId, home)
-      // Only apply if the user hasn't typed in the meantime.
-      setFolder((prev) => (prev.trim().length > 0 ? prev : home))
-    })
+    connectToHost(host)
+      .getMeta()
+      .then((meta) => {
+        if (cancelled) return
+        const home = meta?.home
+        if (!home) return
+        homeByHost.current.set(hostId, home)
+        // Only apply if the user hasn't typed in the meantime.
+        setFolder((prev) => (prev.trim().length > 0 ? prev : home))
+      })
+      .catch(() => {
+        // Best-effort. User can still type a path.
+      })
     return () => {
       cancelled = true
     }
@@ -213,7 +205,7 @@ function NewSessionForm({
     hostId !== null ? (s.agentsByHost[hostId] ?? EMPTY_AGENTS) : EMPTY_AGENTS,
   )
   const installed = useMemo(
-    () => agents.filter((a) => a.installed && a.credentialsAvailable),
+    () => agents.filter((a) => a.installed),
     [agents],
   )
 
@@ -248,25 +240,20 @@ function NewSessionForm({
     setSubmitting(true)
     try {
       const cwd = folder.trim()
-      // Remember the folder for future sessions on this host. If it already
-      // exists, upsert just bumps lastUsed.
+      // Remember the folder locally for the picker. wagent has its own
+      // /v1/projects but we keep a Dexie cache too so the dropdown is
+      // instant before the network call returns.
       await projectRepository.upsert({
         hostId,
         directory: cwd,
         name: cwd.split('/').pop() || cwd,
       })
-      const record = await createSession(hostId, { agent: selectedAgent, cwd })
       const trimmedAlias = alias.trim()
       const finalAlias =
-        trimmedAlias.length > 0 ? trimmedAlias : await computeDefaultAlias(hostId, cwd)
-      await sessionPreferencesRepository.save({
-        sessionId: record.id,
-        hostId,
-        agent: selectedAgent,
-        alias: finalAlias,
-      })
-      useMetadataStore.getState().upsertSession(hostId, {
-        id: record.id,
+        trimmedAlias.length > 0 ? trimmedAlias : computeDefaultAlias(hostId, cwd)
+      const record = await createSession(hostId, {
+        agent: selectedAgent as AgentKind,
+        cwd,
         alias: finalAlias,
       })
       onCreated(hostId, record.id)
