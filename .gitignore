@@ -1,65 +1,58 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
 # dependencies
 node_modules/
 
-# Expo
-.expo/
+# build output
 dist/
-web-build/
-expo-env.d.ts
+dist-ssr/
+*.tsbuildinfo
 
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
+# generated
+src/routeTree.gen.ts
 
-# Metro
-.metro-health-check*
-/metro-cache/
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
 
-# Temporary files
-*.tmp
-*.temp
-.cache/
-
-# debug
+# Logs
+logs/
+*.log
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+pnpm-debug.log*
+lerna-debug.log*
+
+# local env / cache
+*.local
+.cache/
+*.tmp
+*.temp
+.env*.local
+
+# Nix / direnv
+.direnv/
+result
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # macOS
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-
-# generated native folders
-/ios
-/android
-
-# Nix
-.direnv/
-result
-
-# IDE
-.idea/
-*.iml
-
 # Testing
 coverage/
-test_screenshots/
 
 # Local database
 *.db
-
-# Backup files
-*.backup
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
