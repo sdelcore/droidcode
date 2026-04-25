@@ -3,64 +3,54 @@
 Web + desktop + (Android) Tauri client for
 [Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent). Drives
 Claude, Codex, OpenCode, and Amp through a single backend. Mobile-first
-flat session home (filter chips + fuzzy search), multi-pane chat that
-can span hosts, and a small SQLite companion that also supervises the
-daemon so one command gets you a running environment.
+flat session home (filter chips + fuzzy search), multi-pane chat that can
+span hosts, and a small SQLite companion that also supervises the daemon
+so one command gets you a running environment.
 
-> **Status:** mid-migration from the legacy React Native / Expo app at
-> the repo root to a Vite + Tauri stack in `web/`. Legacy code still
-> builds until Phase 10 cutover.
+> The legacy React Native / Expo app at the repo root has been removed.
+> The Vite + Tauri stack now lives at the repo root. See `migration.md`
+> for the full Phase 0–10 history.
 
 ## Repo layout
 
 ```
-web/        Vite + React 19 + Tailwind v4 + shadcn + TanStack Router.
-            Also contains the Tauri 2 shell under web/src-tauri.
-server/     Companion service (Fastify + better-sqlite3) that stores
-            shared session metadata + mirrored event history so
-            multiple browsers/devices pointed at the same daemon
-            converge.
-docs/       ARCHITECTURE.md, DATA_MODELS.md, TROUBLESHOOTING.md.
-            Note: ARCHITECTURE.md still describes the legacy Expo
-            stack — the new stack is documented in migration.md +
-            AGENTS.md until cutover.
-migration.md  End-to-end plan driving the Expo → Vite/Tauri move.
-AGENTS.md     Code style for agents working in this repo.
-
-Legacy (root): app/, components/, stores/, services/, types/ — the
-current Expo app. Gets retired in migration Phase 10.
+src/                  Vite + React 19 + Tailwind v4 + shadcn + TanStack
+                      Router app source.
+src-tauri/            Tauri 2 shell (desktop + Android target).
+public/               Vite static assets.
+scripts/              Smoke + tooling scripts (TypeScript).
+server/               Companion service (Fastify + better-sqlite3) that
+                      stores shared session metadata + mirrored event
+                      history and supervises the sandbox-agent daemon
+                      as a child process.
+docs/                 SDK_LIMITATIONS.md (workarounds for sandbox-agent
+                      quirks) and any future architecture notes.
+flake.nix             Nix dev shell — Node, Rust + cargo-tauri, Tauri
+                      Linux deps, Android SDK + NDK 27, sandbox-agent
+                      via the wagent flake input.
+package.json          The web app's deps + scripts (root level).
 ```
 
-## What exists in the new stack
+## Stack
 
-### `web/`
 * Vite 7 + React 19 + Tailwind v4 + shadcn/ui.
-* TanStack Router (file-based), routes under `web/src/routes/`.
-* `sandbox-agent` TypeScript SDK with a vendored IndexedDB persist
-  driver.
-* Zustand stores (`web/src/stores/`): host / project / session / chat /
+* TanStack Router (file-based), routes under `src/routes/`.
+* `sandbox-agent` TypeScript SDK with a vendored IndexedDB persist driver.
+* Zustand stores under `src/stores/`: host / project / session / chat /
   config / settings / visibility / metadata / sessionLive.
-* Tauri 2 shell in `web/src-tauri/` (Linux only in dev so far; Android
-  lands in Phase 9).
-
-### `server/`
-* `droidcode-server` — Node + Fastify + `better-sqlite3`, default port
-  `2469`. Runs next to `sandbox-agent` on the daemon host.
-* REST endpoints:
-  * `GET/PUT/DELETE /v1/sessions[/:id]`
-  * `GET/POST       /v1/sessions/:id/events`
-  * `GET/PUT/DELETE /v1/projects`
-  * `GET            /v1/health`
-* See `server/README.md` for env vars + deployment notes.
+* Tauri 2 shell at `src-tauri/` (Linux + Android targets).
+* PWA via `vite-plugin-pwa` (Workbox).
+* Companion: Node + Fastify + `better-sqlite3` at `server/`, default port
+  `2469`.
 
 ## Running locally
 
 All commands assume `nix develop` (direnv picks it up automatically).
 The `sandbox-agent` binary is supplied by the `wagent` flake input and
-is on PATH inside the dev shell. The companion spawns it as a child on
+is on PATH in the dev shell. The companion spawns it as a child on
 startup, so there are only two processes to manage.
 
-### 1. Start the companion (which also spawns the daemon on :2468)
+### 1. Companion (also spawns the daemon on :2468)
 
 ```
 cd server
@@ -68,16 +58,15 @@ npm install
 npm run start
 ```
 
-Listens on `:2469`, spawns `sandbox-agent server` on `:2468`, stores
-its SQLite DB at `~/.local/share/droidcode/server.sqlite`. Crashes
-of either get restarted automatically; SIGTERM/SIGINT propagate
-cleanly. Set `DROIDCODE_NO_DAEMON=1` to skip child-spawning if you
-run your own daemon.
+Listens on `:2469`, spawns `sandbox-agent server` on `:2468`, stores its
+SQLite DB at `~/.local/share/droidcode/server.sqlite`. Crashes of either
+get restarted automatically; SIGTERM/SIGINT propagate cleanly. Set
+`DROIDCODE_NO_DAEMON=1` to skip child-spawning when running your own
+daemon.
 
-### 2. Start the web client
+### 2. Web client (Vite, root)
 
 ```
-cd web
 npm install
 npm run dev -- --host 0.0.0.0    # drop --host for localhost only
 ```
@@ -86,14 +75,60 @@ Open `http://<host>:5173`. On first load the client auto-seeds a Host
 using the companion's `/v1/meta` hostname — no manual host-add step.
 Delete it from `/settings` if you want to start over.
 
-### 3. Legacy Expo app (still buildable)
+### 3. Tauri (optional)
 
 ```
-npm install    # root
-npx expo start
+cargo tauri dev       # opens a native window pointed at the Vite dev server
+cargo tauri build     # production native bundle (Linux AppImage primary)
 ```
 
-Retires in Phase 10.
+Identifier is `dev.sdelcore.droidcode`. Updater endpoint not yet wired
+(Phase 8).
+
+## Smoke / validation
+
+```
+npm run typecheck      # tsc -b --noEmit
+npm run lint           # eslint
+npm run smoke          # connect to daemon at $SANDBOX_AGENT_URL,
+                       # prompt $SMOKE_AGENT (default claude),
+                       # dump accumulator output. End-to-end SDK proof.
+```
+
+Override smoke target:
+```
+SANDBOX_AGENT_URL=http://nightman:2468 SMOKE_AGENT=opencode npm run smoke
+```
+
+## Routes
+
+```
+/                                                  flat session home —
+                                                   tiles, filter chips
+                                                   (host/project/status),
+                                                   fuzzy search, URL-backed
+                                                   filter state.
+/chat/$hostId/$sessionId?extra=hostId:sessionId,…  chat, up to 3 panes +
+                                                   sidebar. Panes can span
+                                                   hosts.
+/settings                                          hosts CRUD, theme,
+                                                   auto-accept, debug logs.
+```
+
+### Home-page URL filter state
+
+```
+/?q=search&h=1,2&p=/abs/path&s=running,completed&sort=alpha
+```
+
+* `q` — fuzzy text (alias, cwd, hostname, agent)
+* `h` — comma-separated hostIds
+* `p` — comma-separated project directories
+* `s` — comma-separated statuses: `running | completed`
+* `sort` — `recent | created | alpha` (`recent` default)
+
+Project chips cascade from host selection. Filters serialize verbatim
+into the URL so they're shareable and survive back/forward.
 
 ## Cross-device story
 
@@ -102,22 +137,31 @@ daemon + companion sees:
 
 * **Same session list** (daemon doesn't expose one — companion does).
 * **Same aliases and project folder names** (mirrored via companion).
-* **Same chat history** — events are mirrored as they stream. Fresh
-  browser opening a session fetches history from the companion and
-  replays it through the accumulator.
+* **Same chat history** — events mirrored as they stream. Fresh browser
+  opening a session fetches history from the companion and replays
+  through the accumulator.
 
-Without the companion, the web app still works per-browser; metadata
-and history just stay local. Set a per-host companion URL when adding
-the host (or leave blank and we default to `http://<host>:2469`).
+Without the companion, the app still works per-browser; metadata and
+history just stay local. Set a per-host companion URL when adding the
+host (or leave blank — defaults to `http://<host>:2469`).
+
+## Things that stay per-browser (by design)
+
+* `settingsStore` — theme, auto-accept, debug logs.
+* Filter draft state (URL-backed but not synced cross-device).
+* `hostStore.hosts` — you add your own URLs.
+* `sessionLiveStore` — ephemeral.
+
+Everything else (aliases, project folders, chat history) follows you
+across browsers pointed at the same daemon + companion.
 
 ## Key docs
 
-* `migration.md` — phased plan, decisions, risks.
-* `AGENTS.md` — code style for the web app.
-* `web/README.md` — web-specific dev notes.
-* `server/README.md` — companion service runbook.
-* `docs/ARCHITECTURE.md` — legacy Expo architecture (retires with
-  Phase 10).
+* `migration.md` — phased history, decisions, risks.
+* `AGENTS.md` — code style + architectural rules for new contributors.
+* `CLAUDE.md` — Claude Code guidance for this repo.
+* `server/README.md` — companion service runbook + env vars.
+* `docs/SDK_LIMITATIONS.md` — sandbox-agent / Rivet quirks we work around.
 
 ## License
 

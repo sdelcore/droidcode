@@ -1,41 +1,35 @@
 # Agent Guidelines for DroidCode
 
-The repo is mid-migration (see `migration.md`). Two stacks live here:
-
-* **New stack** (`web/` + `server/`) — Vite + React 19 + Tailwind v4 +
-  shadcn + TanStack Router, plus a small Node/Fastify companion with
-  SQLite. **All new code goes here.**
-* **Legacy stack** (repo root `app/`, `components/`, `stores/`,
-  `services/`, `types/`) — React Native + Expo. Frozen. Retires in
-  Phase 10.
+Single stack — Vite + React 19 + Tailwind v4 + shadcn + TanStack Router
+at the repo root, plus a small Node/Fastify companion under `server/`.
+The legacy React Native / Expo app was retired in Phase 10 cutover (see
+`migration.md`). All work happens here.
 
 ## Commands (inside `nix develop`)
 
 ```
-# web
-cd web
-npm run dev              # vite dev, port 5173
-npm run dev -- --host 0.0.0.0   # LAN/tailnet
-npm run build            # prod build (tsc -b && vite build + PWA)
-npm run typecheck        # tsc -b --noEmit (run before commits)
-npm run lint             # eslint
-npm run smoke            # end-to-end SDK test against a live daemon
+# web (at repo root)
+npm run dev                       # vite dev, port 5173
+npm run dev -- --host 0.0.0.0     # LAN / tailnet
+npm run build                     # prod build (tsc -b && vite build + PWA)
+npm run typecheck                 # tsc -b --noEmit (run before commits)
+npm run lint                      # eslint
+npm run smoke                     # end-to-end SDK test against a live daemon
 
-# server
+# tauri (root)
+cargo tauri dev
+cargo tauri build
+
+# companion server
 cd server
-npm run start            # fastify on :2469
+npm run start                     # fastify on :2469
 npm run typecheck
-
-# legacy (still works, don't add features to it)
-npm start                # expo start
-npm run typecheck
-npm run lint
 ```
 
-## Project layout (new stack)
+## Project layout
 
 ```
-web/src/
+src/
   routes/              # TanStack Router — flat set:
                        # /, /chat/$hostId/$sessionId, /settings
   components/
@@ -46,15 +40,20 @@ web/src/
     settings/          # HostsSection (host CRUD lives here, not a route)
     NewSessionDialog.tsx   # unified creation modal — Sheet on mobile,
                            # Dialog on desktop, inline Add-host flow
-  stores/              # zustand stores; see web/README.md for map
+    FolderCombobox.tsx     # inline folder picker for New Session
+  stores/              # zustand stores
   services/
-    sandboxAgent/      # SDK connect + persist driver
+    sandboxAgent/      # SDK connect + fs browse + persist driver
     messaging/         # accumulator
     sessions/          # sortAndFilter, homeFilters (URL state), panes (cross-host tuples)
     db/                # Dexie tables
     sync/              # companion REST client + eventMirror + /v1/meta bootstrap
     errors/, util/
   types/domain.ts      # Host, ProjectFolder, SessionPreferences, etc.
+
+src-tauri/             # Tauri 2 shell (Linux + Android)
+public/                # Vite static assets
+scripts/               # Smoke + tooling
 
 server/src/
   server.ts            # fastify entry + daemon child-spawn wiring
@@ -144,21 +143,20 @@ server/src/
 
 ## Testing
 
-* `web/scripts/phase2-smoke.ts` is the current end-to-end proof. Runs
-  via `npm run smoke`. Keep it passing.
-* Legacy Jest tests at `__tests__/` still pass; new stack doesn't yet
-  have a test suite (Phase 11 follow-up).
+* `scripts/phase2-smoke.ts` is the current end-to-end proof. Runs via
+  `npm run smoke`. Keep it passing.
+* No formal test suite yet (Phase 11 follow-up).
 
 ## Docs upkeep
 
-**After any non-trivial change** to the new stack, update:
-1. `README.md` (top-level) — if new component or top-level feature.
-2. `web/README.md` — if a store, service, or route was added/renamed.
-3. `server/README.md` — if companion API changed.
-4. `migration.md` — if a phase milestone was hit or a decision changed.
-5. This file — if a new convention / rule / pitfall is worth
+**After any non-trivial change**, update:
+1. `README.md` (top-level) — if a new component, top-level feature, or
+   layout changes. Store/service/route map lives here too.
+2. `server/README.md` — if companion API changed.
+3. `migration.md` — if a phase milestone was hit or a decision changed.
+4. This file — if a new convention / rule / pitfall is worth
    capturing for future agents.
-6. `docs/SDK_LIMITATIONS.md` — **any time you paper over a sandbox-agent
+5. `docs/SDK_LIMITATIONS.md` — **any time you paper over a sandbox-agent
    or Rivet daemon quirk**. Append a row. Triggers:
    * `catch` that swallows an expected SDK error that isn't actually a
      failure (e.g. `permission 'X' not found`)

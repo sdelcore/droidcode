@@ -5,16 +5,16 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 ## Repo overview
 
 DroidCode is a web + desktop + Android Tauri client for
-[Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent). It's
-mid-migration from a React Native / Expo app at the repo root to a
-Vite + Tauri stack under `web/`.
+[Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent). The
+Vite + Tauri stack is the only stack — the legacy React Native / Expo
+app was deleted in Phase 10 cutover (see `migration.md`).
 
-* **New stack lives in `web/` and `server/`** — all new work goes here.
-* **Legacy stack is everything else at the repo root** — frozen, retires
-  in Phase 10 of `migration.md`.
-* **`server/` is a new Node + Fastify + SQLite companion** (port 2469)
-  that sits next to `sandbox-agent` (port 2468) to hold shared session
-  metadata + mirrored event history so multiple browsers converge.
+* **Web app lives at the repo root** — `src/`, `src-tauri/`, `public/`,
+  `package.json`, `vite.config.ts`. All new work goes here.
+* **`server/` is a Node + Fastify + SQLite companion** (port 2469) that
+  sits next to `sandbox-agent` (port 2468) to hold shared session
+  metadata + mirrored event history so multiple browsers converge. It
+  also supervises the daemon as a child process.
 
 For conventions, architecture rules, and pitfalls, **read `AGENTS.md`
 first.** It's the canonical style guide for new-stack work.
@@ -54,8 +54,7 @@ Override daemon / companion behavior with env vars:
 ## Key commands (inside `nix develop`)
 
 ```bash
-# web
-cd web
+# web (at repo root)
 npm run dev                        # vite dev
 npm run dev -- --host 0.0.0.0      # bind LAN / tailnet
 npm run build                      # prod (tsc + vite + PWA)
@@ -63,25 +62,20 @@ npm run typecheck                  # tsc -b --noEmit
 npm run lint                       # eslint
 npm run smoke                      # end-to-end SDK test
 
-# tauri (same directory)
+# tauri (same directory — root)
 cargo tauri dev
 cargo tauri build
 
-# server
+# companion server
 cd server
 npm run start
 npm run typecheck
-
-# legacy expo app (still works — don't add features)
-npm start                          # at repo root
-npm run typecheck
-npm run lint
 ```
 
-## Project layout (new stack)
+## Project layout
 
 ```
-web/src/
+src/
   routes/              TanStack Router file routes:
                          /                 (flat session home, URL-backed filters)
                          /chat/$hostId/$sessionId?extra=hostId:sessionId,…
@@ -95,9 +89,10 @@ web/src/
     settings/          HostsSection
     NewSessionDialog.tsx   (unified: Sheet on mobile, Dialog on desktop,
                             inline Add-host flow)
-  stores/              zustand — see web/README.md for the map
+    FolderCombobox.tsx (inline folder picker for New Session)
+  stores/              zustand — see AGENTS.md / store map
   services/
-    sandboxAgent/      SDK connect + cached IndexedDB persist driver
+    sandboxAgent/      SDK connect + fs browse + cached IndexedDB driver
     messaging/         event accumulator → Message[]
     db/                Dexie (hosts, projects, sessionPreferences,
                        hostModelDefaults)
@@ -106,6 +101,10 @@ web/src/
                        panes)
     errors/, util/
   types/domain.ts      Host, ProjectFolder, SessionPreferences, …
+
+src-tauri/             Tauri 2 shell (Linux + Android targets).
+public/                Vite static assets.
+scripts/               Smoke test (phase2-smoke.ts) + tooling.
 
 server/src/
   server.ts            fastify entry + daemon child-spawn wiring
@@ -120,7 +119,7 @@ server/src/
   `SDK.listSessions()` reads the client-side IndexedDB persist driver.
 * **Sessions / aliases / project folders / event history** all sync via
   the companion server's REST API (see `server/README.md` and
-  `web/src/services/sync/`).
+  `src/services/sync/`).
 * **Settings / filter state / host list** stay per-browser by design.
 * A fresh browser connecting to the same daemon + companion sees the
   same sessions + history as any other browser.
@@ -129,16 +128,16 @@ server/src/
 
 **Keep docs up to date alongside code.** After any non-trivial change:
 
-1. `README.md` (repo root) — if a top-level component or user-facing
-   feature changes.
-2. `web/README.md` — if a store / service / route was added / renamed.
-3. `server/README.md` — if the companion's API or config changed.
-4. `AGENTS.md` — if a new convention, rule, or pitfall is worth
+1. `README.md` (repo root) — if a top-level component, layout, or
+   user-facing feature changes. The store/service/route map lives here
+   too now (web's old README was merged in during cutover).
+2. `server/README.md` — if the companion's API or config changed.
+3. `AGENTS.md` — if a new convention, rule, or pitfall is worth
    recording for future agents.
-5. `migration.md` — if a phase milestone was hit or a decision
+4. `migration.md` — if a phase milestone was hit or a decision
    changed.
-6. `CLAUDE.md` (this file) — if the top-level orientation changes.
-7. `docs/SDK_LIMITATIONS.md` — **any time you work around a sandbox-agent
+5. `CLAUDE.md` (this file) — if the top-level orientation changes.
+6. `docs/SDK_LIMITATIONS.md` — **any time you work around a sandbox-agent
    SDK or Rivet daemon limitation**. If you add a `catch` to swallow an
    expected SDK error, cast around a wrong type, introduce a client
    mirror / cache / companion endpoint because a primitive is missing,

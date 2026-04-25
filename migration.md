@@ -236,13 +236,16 @@ Easiest UI screens. Establishes the component patterns for the rest.
 - **Fallback if Tauri Android Mobile bites:** rip out the Tauri Android target and wrap the same Vite build with **Capacitor** instead. UI/state code is unchanged; only the native shell swaps.
 - **Validation:** install APK on the Android phone, find a server via mDNS, scan a QR, complete a chat round-trip against `nightman` over Tailscale.
 
-### Phase 10 — Cutover (1 day)
+### Phase 10 — Cutover (DONE — 2026-04-24)
 
-- Tag final Expo release of current app.
-- Move Expo source to `legacy/` branch.
-- Promote new repo (or `web/` folder) to root.
-- Update `CLAUDE.md`, `AGENTS.md`, `README.md`.
-- Archive native build scripts.
+- ~~Tag final Expo release of current app.~~ Skipped — repo lives only on this machine, history is in git.
+- ~~Move Expo source to `legacy/` branch.~~ Hard-deleted instead. The legacy stack hadn't been touched for 9 days; preserving it as a branch added no value over `git log --before=2026-04-24` if anyone ever wants to read it.
+- ✅ **Promoted `web/` to repo root.** Vite + Tauri stack is now the only stack at the top of the tree; companion stays under `server/`.
+- ✅ Updated `CLAUDE.md`, `AGENTS.md`, `README.md`, this file.
+- ✅ `flake.nix` simplified — dropped NDK 26 + watchman (Expo-only), removed `cd web` prefixes from shell hints.
+- ✅ Merged `web/README.md` into root `README.md`.
+
+Commits: `e73a359` (delete legacy), `ccf854f` (web → root), `3da5c3c` (flake), then a docs sweep.
 
 **Total estimated effort: 4–6 weeks of focused work, longer with vibe-coding iteration.**
 
@@ -268,7 +271,7 @@ Second round of design expansion, driven by real mobile use:
 * **Routes collapsed** — `/hosts`, `/hosts/add`, `/projects/$hostId`, `/sessions/$hostId/$projectId` all deleted. Host CRUD moves into a `HostsSection` card in `/settings`. Remaining routes: `/`, `/chat/$hostId/$sessionId`, `/settings`.
 * **SDK_LIMITATIONS** — added row 17 (`sandbox-agent --cors-allow-origin` rejects `*`; companion enumerates origins explicitly).
 
-Phases 7–10 still pending.
+Phase 10 cutover landed 2026-04-24. Phases 7–9 (PWA polish + Caddy/Tailscale, Tauri desktop polish, Tauri Android) still pending.
 
 ---
 
