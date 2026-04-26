@@ -29,12 +29,14 @@ interface RequestOptions {
 
 async function request<T>(host: Host, path: string, opts: RequestOptions = {}): Promise<T> {
   const url = `${wagentBaseUrl(host)}${path}`
+  // Only attach content-type when there's a body — Fastify's JSON parser
+  // rejects requests that advertise application/json with an empty body
+  // (DELETE / abort / etc.) with a 400.
+  const headers: Record<string, string> = { ...authHeaders(host) }
+  if (opts.body !== undefined) headers['content-type'] = 'application/json'
   const init: RequestInit = {
     method: opts.method ?? 'GET',
-    headers: {
-      'content-type': 'application/json',
-      ...authHeaders(host),
-    },
+    headers,
     signal: opts.signal,
   }
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body)
