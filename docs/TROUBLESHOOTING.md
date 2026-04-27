@@ -1,55 +1,40 @@
-# Troubleshooting Log
+# Troubleshooting
 
-This document tracks issues encountered during development and their resolutions.
+Active issue triage:
 
----
+* **wagent-side bugs** (daemon errors, missing endpoints, agent
+  crashes): file at <https://github.com/sdelcore/wagent/issues>.
+* **droidcode-side bugs** (UI, store, route, build): file at
+  <https://github.com/sdelcore/droidcode/issues>.
 
-## Keyboard Covering Message View (v1.2.2)
+The previous Expo-era log lived here; it's been retired with the
+React Native stack and is no longer relevant. Check
+`migration.md` for the cutover history.
 
-**Date**: 2026-01-08
+## Quick diagnostics
 
-**Issue**: When opening the keyboard in the chat/message view, the keyboard covers the bottom part of the screen, making it impossible to see messages near the bottom or the text being typed.
+### Web app shows "Failed to fetch" / connection errors
 
-**Symptoms**:
-- User taps on message input to type
-- Keyboard opens and pushes input up
-- Message list content stays in place
-- Bottom messages are hidden behind keyboard + input
+1. Confirm wagent is running: `curl http://<host>:2468/v1/health` →
+   `{"status":"ok"}`.
+2. Confirm CORS allows the browser's origin. Restart wagent with
+   `WAGENT_CORS=*` (dev) or an explicit allowlist (prod).
+3. If the host's added in `/settings` doesn't match where wagent is
+   running, edit it.
 
-**Root Cause**:
-The `FlashList` component was wrapped in a plain `View` container. While `KeyboardStickyView` correctly moved the input up with the keyboard, the `FlashList` content didn't adjust its bottom inset to account for the keyboard height.
+### "agent_not_available" on session creation
 
-The `messageListContentStyle` even reduced padding when keyboard was visible (`paddingBottom: isKeyboardVisible ? 0 : Spacing.sm`), which was counterproductive.
+The agent (`claude` / `pi`) isn't installed on the wagent host.
+Check `GET <host>:2468/v1/agents` for the reason. For claude on
+NixOS, ensure `claude` is on PATH so wagent's auto-detection picks
+it up — see
+[wagent/src/agent/claude_acp.ts](https://github.com/sdelcore/wagent/blob/main/src/agent/claude_acp.ts).
 
-**Solution**:
-Integrated `KeyboardAwareScrollView` from `react-native-keyboard-controller` with `FlashList` using the `renderScrollComponent` prop.
+### SSE goes silent on mobile
 
-**Files Modified**:
-- `app/sessions/[hostId]/[projectId]/[sessionId]/index.tsx`
-
-**Changes**:
-1. Added `forwardRef` import from React
-2. Added `KeyboardAwareScrollView` import from `react-native-keyboard-controller`
-3. Created `RenderScrollComponent` - a forwarded ref wrapper for `KeyboardAwareScrollView`
-4. Added `renderScrollComponent={RenderScrollComponent}` prop to `FlashList`
-5. Updated `messageListContentStyle` to have consistent bottom padding (80px for input area)
-
-**Code Snippet**:
-```tsx
-// Scroll component for FlashList that integrates with KeyboardAwareScrollView
-const RenderScrollComponent = forwardRef<any, any>((props, ref) => (
-  <KeyboardAwareScrollView {...props} ref={ref} />
-));
-
-// In FlashList:
-<FlashList
-  renderScrollComponent={RenderScrollComponent}
-  // ...
-/>
-```
-
-**References**:
-- [KeyboardAwareScrollView Docs](https://kirillzyusko.github.io/react-native-keyboard-controller/docs/api/components/keyboard-aware-scroll-view)
-- [FlashList renderScrollComponent](https://shopify.github.io/flash-list/docs/usage/)
-
-**Status**: Fixed
+Expected when the browser tab is backgrounded or the network
+hands off. The chat store catches up automatically on
+`visibilitychange` / `focus` / `online` via
+`client.listEvents(sessionId, { after: lastEventIndex })`. If a
+session looks stuck for >30s after foregrounding, file an issue
+with the browser + network details.

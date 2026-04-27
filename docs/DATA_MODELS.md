@@ -1,357 +1,224 @@
 # Data Models
 
-This document describes the TypeScript types used in DroidCode Expo.
+Two layers of types live in the codebase:
 
-## Domain Models (`types/domain.ts`)
+* **wagent wire types** (`src/services/wagent/types.ts`) — re-exports +
+  re-types from the v1 contract. Mirror of the wagent repo's
+  `src/types.ts`. Don't modify them locally; if the wire shape needs to
+  change, change wagent and bump.
+* **domain types** (`src/types/domain.ts`) — purely client-side state
+  (filters, preferences, message-rendering shape).
 
-### Agent
+This file documents both. Source of truth is the code; this is a
+human-readable index.
 
-```typescript
-type AgentType = 'plan' | 'build' | 'shell' | 'general' | 'explore';
+## Wire types (from wagent v1)
 
-interface Agent {
-  type: AgentType;
-  displayName: string;
-  apiName: string;
-  description: string;
-  isPrimary: boolean;
-  icon: string;
+### `AgentKind`
+
+```ts
+type AgentKind = 'claude' | 'pi' | 'echo'
+```
+
+### `Session`
+
+```ts
+interface Session {
+  id: string
+  agent: AgentKind
+  cwd: string
+  alias: string | null
+  model: string | null
+  createdAt: number
+  updatedAt: number
+  destroyedAt: number | null
 }
 ```
 
-**Primary Agents:**
-- `plan` - Plans implementation strategy
-- `build` - Implements code changes
-- `shell` - Runs shell commands directly
+### `ContentBlock`
 
-**Subagents:**
-- `general` - General-purpose assistant
-- `explore` - Codebase exploration
-
-### ThinkingMode
-
-```typescript
-type ThinkingModeType = 'normal' | 'high' | 'max';
-
-interface ThinkingMode {
-  type: ThinkingModeType;
-  displayName: string;
-  description: string;
-  budgetTokens: number | null;
-  variant: 'high' | 'max' | null;
+```ts
+interface ContentBlock {
+  type: 'text' | 'image'
+  text?: string
+  data?: string      // base64
+  mimeType?: string
 }
 ```
 
-| Mode | Budget | API Variant |
-|------|--------|-------------|
-| normal | null | null |
-| high | 8,000 | 'high' |
-| max | 32,000 | 'max' |
+### `EventEnvelope` + `SessionUpdate`
 
-### Host
+```ts
+interface EventEnvelope {
+  sessionId: string
+  eventIndex: number
+  createdAt: number
+  kind: SessionUpdateKind
+  payload: SessionUpdate
+}
 
-```typescript
+type SessionUpdateKind =
+  | 'agent_message_chunk'
+  | 'agent_thought_chunk'
+  | 'tool_call'
+  | 'tool_call_update'
+  | 'plan'
+  | 'user_message_chunk'
+  | 'permission_request'
+  | 'permission_resolved'
+  | 'stop'
+  | 'subprocess_died'
+  | 'session_destroyed'
+```
+
+`payload.kind` mirrors the envelope's `kind`. The rest of the payload
+varies — see wagent's `docs/architecture.md` for the per-kind shape.
+
+### `PermissionOutcome`
+
+```ts
+type PermissionOutcome = 'allow_always' | 'allow_once' | 'reject'
+```
+
+### `ApiError`
+
+```ts
+interface ApiError {
+  error: { code: string; message: string; details?: unknown }
+}
+```
+
+The client throws `WagentError(status, code, message, details)` for
+every non-2xx; `formatError` in `services/errors/` turns it into toast
+text.
+
+## Domain types (`src/types/domain.ts`)
+
+### `Host`
+
+```ts
 interface Host {
-  id: number;
-  name: string;
-  host: string;
-  port: number;
-  isSecure: boolean;
-  lastConnected?: number;
-  createdAt: number;
+  id: number
+  name: string
+  host: string
+  port: number
+  isSecure: boolean
+  token?: string         // Bearer token, sent as Authorization header
+  lastConnected?: number
+  createdAt: number
+  // legacy — left on the type so old Dexie rows decode cleanly:
+  companionUrl?: string
+  companionToken?: string
 }
 ```
 
-Represents a configured OpenCode server.
+### `ProjectFolder`
 
-### Project
-
-```typescript
-type ProjectStatus = 'running' | 'stopped' | 'starting' | 'stopping' | 'error' | 'unknown';
-
-interface Project {
-  id: number;
-  hostId: number;
-  parentProjectId?: number;  // Worktree parent
-  manifestId?: string;       // For sync
-  name: string;
-  directory: string;
-  port: number;
-  pid?: number;
-  status: ProjectStatus;
-  lastConnected?: number;
-  createdAt: number;
+```ts
+interface ProjectFolder {
+  id: number
+  hostId: number
+  name: string
+  directory: string      // absolute path
+  lastUsed?: number
+  createdAt: number
 }
 ```
 
-Represents an OpenCode server instance. Root projects run on port 4096, worktrees on 4100-4199.
+Local mirror used by the folder picker. wagent has its own
+`/v1/projects` endpoint with similar semantics; the two are kept in
+sync per host.
 
-### SlashCommand
+### Filters
 
-```typescript
-interface SlashCommand {
-  name: string;
-  description: string;
-  isBuiltIn: boolean;
+```ts
+type SortPreset = 'recent' | 'workflow' | 'created' | 'duration' | 'files' | 'alpha'
+type StatusFilter = 'running' | 'completed'
+
+interface SessionFilters {
+  modes: Set<string>
+  statuses: Set<StatusFilter>
+  sortPreset: SortPreset
 }
 ```
 
-Built-in commands: `/undo`, `/redo`, `/compact`, `/clear`
+`modes` are agent-specific (whatever string the agent surfaces) and
+serialize into the URL via `serializeFilters` /
+`deserializeFilters`. `workflow` sort groups sessions by mode +
+running-state (`WORKFLOW_PRIORITY` table).
 
-## API DTOs (`types/api.ts`)
+### `SessionPreferences` (Dexie)
 
-### SessionDto
-
-```typescript
-interface SessionDto {
-  id: string;
-  projectID: string;
-  directory: string;
-  parentID?: string;
-  title: string;
-  version: string;
-  time: SessionTimeDto;
-  summary?: SessionSummaryDto;
-  share?: SessionShareDto;
-  revert?: SessionRevertDto;
+```ts
+interface SessionPreferences {
+  sessionId: string
+  hostId: number
+  agent?: string
+  mode?: string
+  model?: string
+  thoughtLevel?: string
+  inputDraft?: string
+  alias?: string
 }
 ```
 
-### MessageDto
+Per-browser. Wagent owns the canonical alias + model on the session row;
+this table caches the user's input draft and last-picked thought level.
 
-```typescript
-interface MessageDto {
-  id: string;
-  role: 'user' | 'assistant';
-  parts: MessagePartDto[];
-  agent?: string;
-  timestamp: number;
-}
+### `HostModelDefault` (Dexie)
 
-type MessagePartType = 'text' | 'thinking' | 'reasoning' | 'code' | 'tool' | 'file';
-
-interface MessagePartDto {
-  type: MessagePartType;
-  text?: string;
-  language?: string;
-  tool?: string;
-  toolName?: string;
-  state?: ToolStateDto;
-  input?: unknown;
-  output?: string;
-  mime?: string;
-  url?: string;
-  filename?: string;
+```ts
+interface HostModelDefault {
+  hostId: number
+  agent: string
+  model: string
 }
 ```
 
-### ToolStateDto
+Last model picked per (host, agent). Used to seed `NewSessionDialog`.
 
-```typescript
-type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'error';
+### Messages (rendering)
 
-interface ToolStateDto {
-  status?: ToolStatus;
-  input?: unknown;
-  output?: string;
-  title?: string;
-  error?: string;
+```ts
+type MessageRole = 'user' | 'assistant'
+
+interface MessagePart {
+  kind: 'text' | 'thought' | 'tool_call' | 'image'
+  id: string
+  content: string
+  dataUrl?: string
+  mimeType?: string
+  toolName?: string
+  toolStatus?: 'pending' | 'running' | 'complete' | 'error'
+  toolOutput?: string
+}
+
+interface Message {
+  id: string
+  role: MessageRole
+  parts: MessagePart[]
+  agent?: string
+  isStreaming: boolean
+  createdAt: number
 }
 ```
 
-### TodoDto
+Built by `MessageAccumulator.push(event)`. Each `user_message_chunk`
+opens a new turn — the next `agent_message_chunk` starts a fresh
+assistant `Message`.
 
-```typescript
-type TodoStatus = 'pending' | 'in_progress' | 'completed';
+`MessageGroup` merges consecutive messages of the same role for the
+list renderer.
 
-interface TodoDto {
-  id: string;
-  content: string;
-  status: TodoStatus;
-  activeForm?: string;
-}
+## Dexie schema
+
+```
+hosts                  Host
+projects               ProjectFolder
+sessionPreferences     SessionPreferences (PK: sessionId)
+hostModelDefaults      HostModelDefault   (compound PK: [hostId, agent])
 ```
 
-### FileDiffDto
-
-```typescript
-interface FileDiffDto {
-  path: string;
-  additions: number;
-  deletions: number;
-}
-```
-
-## SSE Events (`types/sse.ts`)
-
-### Event Types
-
-```typescript
-type SseEventType =
-  | 'message.start'
-  | 'message.delta'
-  | 'message.complete'
-  | 'session.updated'
-  | 'session.diff'
-  | 'session.status'
-  | 'todo.updated'
-  | 'permission.requested'
-  | 'permission.replied'
-  | 'error';
-```
-
-### Event Payloads
-
-```typescript
-// message.start
-interface MessageStartEvent {
-  sessionId: string;
-  messageId: string;
-  role: 'user' | 'assistant';
-  agent?: string;
-}
-
-// message.delta
-interface MessageDeltaEvent {
-  sessionId: string;
-  messageId: string;
-  partId: string;
-  partType: MessagePartType;
-  content: string;
-  toolName?: string;
-  toolInput?: string;
-  toolOutput?: string;
-  toolStatus?: ToolStatus;
-}
-
-// todo.updated
-interface TodoUpdatedEvent {
-  sessionId: string;
-  todos: TodoDto[];
-}
-
-// permission.requested
-interface PermissionRequestedEvent {
-  sessionId: string;
-  messageId: string;
-  permissionId: string;
-  toolType: string;
-  title: string;
-  metadata?: Record<string, string>;
-}
-```
-
-## Database Entities
-
-### HostRow (SQLite)
-
-```typescript
-interface HostRow {
-  id: number;
-  name: string;
-  host: string;
-  port: number;
-  is_secure: number;  // 0 or 1
-  last_connected: number | null;
-  created_at: number;
-}
-```
-
-### ProjectRow (SQLite)
-
-```typescript
-interface ProjectRow {
-  id: number;
-  host_id: number;
-  parent_project_id: number | null;
-  manifest_id: string | null;
-  name: string;
-  directory: string;
-  port: number;
-  pid: number | null;
-  status: string;
-  last_connected: number | null;
-  created_at: number;
-}
-```
-
-## Store State Types
-
-### ChatState
-
-```typescript
-interface ChatState {
-  sessionId: string | null;
-  hostId: number | null;
-  messages: MessageDto[];
-  streamingMessage: MessageDto | null;
-  isLoading: boolean;
-  isSending: boolean;
-  error: string | null;
-  inputText: string;
-  selectedAgent: AgentType;
-  thinkingMode: ThinkingModeType;
-  connectionState: ConnectionState;
-  todos: TodoDto[];
-  diffs: FileDiffDto[];
-  pendingPermission: Permission | null;
-  isAssistantTurnActive: boolean;
-  isSessionBusy: boolean;
-  canRedo: boolean;
-}
-```
-
-### ProjectState
-
-```typescript
-interface ProjectState {
-  projects: Project[];
-  worktrees: Map<number, Project[]>;
-  selectedProjectId: number | null;
-  isLoading: boolean;
-  isInitialized: boolean;
-  error: string | null;
-}
-```
-
-## Type Conversions
-
-### Row to Domain (Example)
-
-```typescript
-function rowToProject(row: ProjectRow): Project {
-  return {
-    id: row.id,
-    hostId: row.host_id,
-    parentProjectId: row.parent_project_id ?? undefined,
-    manifestId: row.manifest_id ?? undefined,
-    name: row.name,
-    directory: row.directory,
-    port: row.port,
-    pid: row.pid ?? undefined,
-    status: row.status as ProjectStatus,
-    lastConnected: row.last_connected ?? undefined,
-    createdAt: row.created_at,
-  };
-}
-```
-
-## Constants
-
-### Port Ranges
-
-- Main host: 4096
-- Worktrees: 4100-4199
-
-### Status Colors
-
-```typescript
-const PROJECT_STATUS_COLORS = {
-  running: '#4CAF50',   // Green
-  stopped: '#9E9E9E',   // Grey
-  starting: '#FF9800',  // Orange
-  stopping: '#FF9800',  // Orange
-  error: '#F44336',     // Red
-  unknown: '#9E9E9E',   // Grey
-};
-```
+Migrations live in `src/services/db/`. wagent state (sessions, events,
+projects on the daemon side) is *not* mirrored here — those queries hit
+wagent directly.
