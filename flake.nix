@@ -64,7 +64,56 @@
           glib-networking  # runtime TLS for webkit fetch()
         ];
 
+        packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+
+        npmDeps = pkgs.fetchNpmDeps {
+          src = ./.;
+          hash = pkgs.lib.fakeHash;
+        };
+
+        # Static build of the Vite app — `npm run build` → `dist/`.
+        # Hosted by Caddy in the NixOS module; no Tauri / Android here.
+        droidcode-static = pkgs.stdenv.mkDerivation {
+          pname = "droidcode-static";
+          version = packageJson.version;
+          src = ./.;
+
+          nativeBuildInputs = [
+            pkgs.nodejs_22
+            pkgs.npmHooks.npmConfigHook
+          ];
+
+          inherit npmDeps;
+
+          # The Tauri rust crate is in src-tauri/ and isn't part of the
+          # web build. Skipping postinstall keeps cargo out of npm ci.
+          npmFlags = [ "--ignore-scripts" ];
+
+          buildPhase = ''
+            runHook preBuild
+            npm run build
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/share/droidcode
+            cp -r dist/. $out/share/droidcode/
+            runHook postInstall
+          '';
+
+          meta = with pkgs.lib; {
+            description = "DroidCode web client — static build for Caddy/nginx";
+            homepage = "https://github.com/sdelcore/droidcode";
+            license = licenses.mit;
+            platforms = platforms.all;
+          };
+        };
+
       in {
+        packages.default = droidcode-static;
+        packages.droidcode-static = droidcode-static;
+
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             pkg-config
