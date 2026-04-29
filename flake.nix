@@ -68,7 +68,7 @@
 
         npmDeps = pkgs.fetchNpmDeps {
           src = ./.;
-          hash = pkgs.lib.fakeHash;
+          hash = "sha256-8r4b+1nYZxGNK0To9QH71beLcfNLS01SZRY+rNQ2R2U=";
         };
 
         # Static build of the Vite app — `npm run build` → `dist/`.
@@ -89,9 +89,14 @@
           # web build. Skipping postinstall keeps cargo out of npm ci.
           npmFlags = [ "--ignore-scripts" ];
 
+          # `npm run build` is `tsc -b && vite build`, but `tsc -b` fails in
+          # the Nix sandbox because `src/routeTree.gen.ts` is gitignored
+          # (the TanStackRouter Vite plugin generates it at `vite build`
+          # start). Run `vite build` directly — typecheck lives in `npm run
+          # typecheck` and is gated separately in CI.
           buildPhase = ''
             runHook preBuild
-            npm run build
+            npx --no-install vite build
             runHook postBuild
           '';
 
