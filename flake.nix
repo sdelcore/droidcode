@@ -64,7 +64,61 @@
           glib-networking  # runtime TLS for webkit fetch()
         ];
 
+        packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+
+        npmDeps = pkgs.fetchNpmDeps {
+          src = ./.;
+          hash = "sha256-8r4b+1nYZxGNK0To9QH71beLcfNLS01SZRY+rNQ2R2U=";
+        };
+
+        # Static build of the Vite app — `npm run build` → `dist/`.
+        # Hosted by Caddy in the NixOS module; no Tauri / Android here.
+        droidcode-static = pkgs.stdenv.mkDerivation {
+          pname = "droidcode-static";
+          version = packageJson.version;
+          src = ./.;
+
+          nativeBuildInputs = [
+            pkgs.nodejs_22
+            pkgs.npmHooks.npmConfigHook
+          ];
+
+          inherit npmDeps;
+
+          # The Tauri rust crate is in src-tauri/ and isn't part of the
+          # web build. Skipping postinstall keeps cargo out of npm ci.
+          npmFlags = [ "--ignore-scripts" ];
+
+          # `npm run build` is `tsc -b && vite build`, but `tsc -b` fails in
+          # the Nix sandbox because `src/routeTree.gen.ts` is gitignored
+          # (the TanStackRouter Vite plugin generates it at `vite build`
+          # start). Run `vite build` directly — typecheck lives in `npm run
+          # typecheck` and is gated separately in CI.
+          buildPhase = ''
+            runHook preBuild
+            npx --no-install vite build
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out/share/droidcode
+            cp -r dist/. $out/share/droidcode/
+            runHook postInstall
+          '';
+
+          meta = with pkgs.lib; {
+            description = "DroidCode web client — static build for Caddy/nginx";
+            homepage = "https://github.com/sdelcore/droidcode";
+            license = licenses.mit;
+            platforms = platforms.all;
+          };
+        };
+
       in {
+        packages.default = droidcode-static;
+        packages.droidcode-static = droidcode-static;
+
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             pkg-config
