@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { SortPreset } from '@/types'
-import type { FacetOption, HomeFilterState, HomeStatus } from '@/services/sessions/homeFilters'
+import type { FacetOption, HomeFilterState, HomeStatus } from '@/services/sessions/homeView'
 
 interface FilterBarProps {
   filters: HomeFilterState

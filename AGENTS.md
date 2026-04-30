@@ -49,7 +49,9 @@ src/
                        # subscribeEvents). Single source of truth for
                        # the v1 wire — speak to it from stores.
     messaging/         # accumulator
-    sessions/          # sortAndFilter, homeFilters (URL state), panes (cross-host tuples)
+    sessions/          # sessionRegistry (one SSE per session, sticky+refcount),
+                       # homeView (URL state + cascade), sessionFields (shared
+                       # session-shape helpers), panes (cross-host tuples)
     db/                # Dexie tables (local-only UX state)
     errors/, util/
   types/domain.ts      # Host, ProjectFolder, SessionPreferences, etc.
@@ -91,13 +93,16 @@ scripts/               # Smoke + tooling
   are `hostId:sessionId,…`. Use `services/sessions/panes.ts`'s parse /
   serialize / paneKey helpers — don't hand-roll encoding. Bare
   sessionIds are accepted for legacy URLs only.
-* **Chat attachments are app-scoped, not component-scoped.** Do NOT
-  call `chatStore.closeSession` from a React `useEffect` cleanup in
-  `ChatPane`. Every unmount (StrictMode, layout swap, nav away + back)
-  would detach + re-subscribe an SSE stream, dropping the live event
-  index in the gap. Detach only on explicit session destroy
-  (`sessionStore.destroySession` handles this) or future explicit
-  disconnect flows.
+* **Chat attachments are app-scoped, not component-scoped.** Use
+  `useStickyChat(hostId, sessionId)` from `services/sessions/sessionRegistry`,
+  which pins the SSE stream open until `sessionStore.destroySession` calls
+  `destroySessionData`. Do NOT add a release/teardown in a React `useEffect`
+  cleanup — every unmount (StrictMode, layout swap, nav away + back) would
+  detach + re-subscribe an SSE stream, dropping the live event index in the
+  gap. Live tiles (sidebar, home grid) can use the ref-counted
+  `useWatchLive` / `useWatchLiveMany`; the registry de-dupes streams by
+  sessionId, so a sticky chat keeps the wire open even if every tile
+  releases.
 * **Don't emoji in code.** Unicode icons are fine when they're part of
   the design system (lucide-react).
 
@@ -117,7 +122,7 @@ scripts/               # Smoke + tooling
 
 ### Naming
 * PascalCase: React components (`MessageBubble.tsx`).
-* camelCase: everything else (`chatStore.ts`, `eventMirror.ts`).
+* camelCase: everything else (`sessionRegistry.ts`, `homeView.ts`).
 * `SCREAMING_SNAKE_CASE`: constants.
 * Booleans: `is`/`has`/`can` prefix.
 * Handlers: `handleX`. Props callbacks: `onX`.

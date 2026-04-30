@@ -32,8 +32,13 @@ package.json          The web app's deps + scripts (root level).
 * TanStack Router (file-based), routes under `src/routes/`.
 * Typed wagent client (`src/services/wagent/`) — fetch + native
   EventSource. No SDK wrapper, no persist driver.
-* Zustand stores under `src/stores/`: host / session / chat / config /
-  settings / visibility / sessionLive.
+* `SessionRegistry` (`src/services/sessions/sessionRegistry.ts`) — one
+  SSE per session, shared by chat + live tiles. Owns the message
+  accumulator, live-status counters, dedup, `Last-Event-ID` resume,
+  and visibility/focus catch-up. Components subscribe via
+  `useChatPane` / `useLiveStatus` (`useSyncExternalStore`).
+* Zustand stores under `src/stores/`: host / session / config /
+  settings / visibility. (Chat + live status moved into the registry.)
 * Tauri 2 shell at `src-tauri/` (Linux + Android targets).
 * PWA via `vite-plugin-pwa` (Workbox).
 
@@ -150,7 +155,8 @@ nothing client-side to mirror.
 * `settingsStore` — theme, auto-accept, debug logs.
 * Filter draft state (URL-backed but not synced cross-device).
 * `hostStore.hosts` — you add your own URLs.
-* `sessionLiveStore` — ephemeral pending-permission state.
+* `sessionRegistry` projections — ephemeral live-status + chat snapshots
+  rebuild from wagent's event log on attach.
 
 ## Key docs
 

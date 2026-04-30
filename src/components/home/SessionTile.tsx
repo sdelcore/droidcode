@@ -10,13 +10,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useLiveStatus } from '@/stores/sessionLiveStore'
+import { useLiveStatus } from '@/stores'
 import {
   isSessionRunning,
   sessionDisplayName,
   sessionMode,
-} from '@/services/sessions/sortAndFilter'
-import { projectLabelFromPath, type FlatSession } from '@/services/sessions/homeFilters'
+} from '@/services/sessions/sessionFields'
+import { projectLabelFromPath, type FlatSession } from '@/services/sessions/homeView'
 
 interface SessionTileProps {
   flat: FlatSession

@@ -5,20 +5,14 @@ import { Columns3, Plus, Server, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useHostStore } from '@/stores/hostStore'
 import { useSessionStore } from '@/stores/sessionStore'
-import { useSessionLiveStore } from '@/stores/sessionLiveStore'
+import { useWatchLiveMany } from '@/stores'
 import {
-  applyHomeFilters,
-  applyHomeSort,
-  buildFlatSessions,
-  DEFAULT_HOME_FILTERS,
-  hostFacets as buildHostFacets,
-  parseHomeSearch,
-  projectFacets as buildProjectFacets,
+  buildHomeView,
   serializeHomeFilters,
   type FlatSession,
   type HomeFilterState,
   type HomeSearch,
-} from '@/services/sessions/homeFilters'
+} from '@/services/sessions/homeView'
 import { FilterBar } from './FilterBar'
 import { SessionTile } from './SessionTile'
 
@@ -36,8 +30,6 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
   const error = useSessionStore((s) => s.error)
   const loadAllHosts = useSessionStore((s) => s.loadAllHosts)
   const destroySession = useSessionStore((s) => s.destroySession)
-  const watch = useSessionLiveStore((s) => s.watch)
-  const unwatch = useSessionLiveStore((s) => s.unwatch)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionActive, setSelectionActive] = useState(false)
@@ -47,14 +39,11 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
     if (hostsLoaded) loadAllHosts()
   }, [hostsLoaded, loadAllHosts])
 
-  const filters = useMemo<HomeFilterState>(() => {
-    const parsed = parseHomeSearch(search)
-    // Merge with defaults so the user always has a valid filter state.
-    return {
-      ...DEFAULT_HOME_FILTERS,
-      ...parsed,
-    }
-  }, [search])
+  const view = useMemo(
+    () => buildHomeView({ search, byHost, hosts }),
+    [search, byHost, hosts],
+  )
+  const { filters, visible, total, facets } = view
 
   const updateFilters = useCallback(
     (next: Partial<HomeFilterState>) => {
@@ -72,40 +61,12 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
     navigate({ to: '/', search: {}, replace: true })
   }, [navigate])
 
-  const flat = useMemo<FlatSession[]>(
-    () => buildFlatSessions({ byHost, hosts }),
-    [byHost, hosts],
-  )
-
-  const hostFacetOpts = useMemo(() => buildHostFacets(flat, hosts), [flat, hosts])
-
-  // Cascade: project facets are derived from flat sessions *after* host
-  // filtering, so they only show projects the user can currently see.
-  const hostFilteredFlat = useMemo(() => {
-    if (filters.hostIds.size === 0) return flat
-    return flat.filter((f) => filters.hostIds.has(f.hostId))
-  }, [flat, filters.hostIds])
-
-  const projectFacetOpts = useMemo(
-    () => buildProjectFacets(hostFilteredFlat),
-    [hostFilteredFlat],
-  )
-
-  const filtered = useMemo(
-    () => applyHomeSort(applyHomeFilters(flat, filters), filters.sort),
-    [flat, filters],
-  )
-
   // Live status subscriptions for visible, non-destroyed sessions only.
-  useEffect(() => {
-    const watching = filtered
+  useWatchLiveMany(
+    visible
       .filter((f) => !f.session.destroyedAt)
-      .map((f) => ({ hostId: f.hostId, sessionId: f.session.id }))
-    for (const w of watching) watch(w.hostId, w.sessionId)
-    return () => {
-      for (const w of watching) unwatch(w.hostId, w.sessionId)
-    }
-  }, [filtered, watch, unwatch])
+      .map((f) => ({ hostId: f.hostId, sessionId: f.session.id })),
+  )
 
   function openSession(f: FlatSession) {
     navigate({
@@ -145,7 +106,7 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
 
   function openSelectedInPanes() {
     if (selected.size === 0) return
-    const ordered = filtered.filter((f) => selected.has(f.session.id))
+    const ordered = visible.filter((f) => selected.has(f.session.id))
     if (ordered.length === 0) return
     const [primary, ...rest] = ordered
     navigate({
@@ -200,7 +161,7 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-xl font-semibold sm:text-2xl">Sessions</h1>
           <span className="text-xs text-muted-foreground">
-            {filtered.length} of {flat.length}
+            {visible.length} of {total}
           </span>
         </div>
         <Button
@@ -215,8 +176,8 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
 
       <FilterBar
         filters={filters}
-        hostFacets={hostFacetOpts}
-        projectFacets={projectFacetOpts}
+        hostFacets={facets.hosts}
+        projectFacets={facets.projects}
         onChange={updateFilters}
         onClear={clearFilters}
       />
@@ -246,7 +207,7 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
         </div>
       )}
 
-      {isLoading && filtered.length === 0 ? (
+      {isLoading && visible.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">
           Loading sessions…
         </p>
@@ -256,14 +217,14 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
           body="Add a host to start a session."
           action={{ label: 'Open settings', onClick: () => navigate({ to: '/settings' }) }}
         />
-      ) : flat.length === 0 ? (
+      ) : total === 0 ? (
         <EmptyState
           title="No sessions"
           body="Create your first session on this host."
           action={{ label: 'New session', onClick: onRequestNewSession }}
           icon={<Server className="size-6 text-muted-foreground" />}
         />
-      ) : filtered.length === 0 ? (
+      ) : visible.length === 0 ? (
         <EmptyState
           title="No matches"
           body="Nothing matches your filters."
@@ -271,7 +232,7 @@ export function HomePage({ search, onRequestNewSession }: HomePageProps) {
         />
       ) : (
         <div className={columnClasses}>
-          {filtered.map((f) => (
+          {visible.map((f) => (
             <div
               key={`${f.hostId}:${f.session.id}`}
               onPointerDown={() => onTilePressStart(f.session.id)}

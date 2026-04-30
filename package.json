@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "generate:routes": "node scripts/generate-router-tree.mjs",
+    "pretypecheck": "npm run generate:routes",
+    "prelint": "npm run generate:routes",
+    "prebuild": "npm run generate:routes",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",

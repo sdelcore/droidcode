@@ -2,14 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { FilePlus2, Plus, X } from 'lucide-react'
 import type { Session } from '@/services/wagent'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
-import { useSessionStore } from '@/stores'
-import { useLiveStatus, useSessionLiveStore } from '@/stores/sessionLiveStore'
+import { useSessionStore, useLiveStatus, useWatchLiveMany } from '@/stores'
 import {
   isSessionRunning,
   sessionCwd,
   sessionDisplayName,
   sessionMode,
-} from '@/services/sessions/sortAndFilter'
+} from '@/services/sessions/sessionFields'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -40,8 +39,6 @@ export function SessionSidebar({
 }: SessionSidebarProps) {
   const sessions = useSessionStore((s) => s.byHost[hostId] ?? EMPTY_SESSIONS)
   const loadForHost = useSessionStore((s) => s.loadForHost)
-  const watch = useSessionLiveStore((s) => s.watch)
-  const unwatch = useSessionLiveStore((s) => s.unwatch)
 
   const [query, setQuery] = useState('')
   const [newSessionOpen, setNewSessionOpen] = useState(false)
@@ -70,14 +67,14 @@ export function SessionSidebar({
   }, [sessions, query])
 
   // Subscribe to live status for every visible session in the sidebar so
-  // dots / waiting indicators update without opening each chat.
-  useEffect(() => {
-    const watching = filtered.filter((s) => !s.destroyedAt).map((s) => s.id)
-    for (const id of watching) watch(hostId, id)
-    return () => {
-      for (const id of watching) unwatch(hostId, id)
-    }
-  }, [filtered, hostId, watch, unwatch])
+  // dots / waiting indicators update without opening each chat. The registry
+  // de-dupes by sessionId, so a session pinned by an open ChatPane stays open
+  // even if this sidebar's refcount drops to zero.
+  useWatchLiveMany(
+    filtered
+      .filter((s) => !s.destroyedAt)
+      .map((s) => ({ hostId, sessionId: s.id })),
+  )
 
   return (
     <aside className="flex h-full w-full flex-col gap-2 border-r border-border bg-muted/30 p-2 sm:w-64">
