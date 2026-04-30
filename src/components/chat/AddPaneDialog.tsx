@@ -6,7 +6,7 @@ import {
   sessionCwd,
   sessionDisplayName,
   sessionMode,
-} from '@/services/sessions/sortAndFilter'
+} from '@/services/sessions/sessionFields'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { HomePage } from '@/components/home/HomePage'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
-import { validateHomeSearch, type HomeSearch } from '@/services/sessions/homeFilters'
+import { validateHomeSearch, type HomeSearch } from '@/services/sessions/homeView'
 
 export const Route = createFileRoute('/')({
   component: HomeRoute,

@@ -2,8 +2,8 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { AgentKind, Session } from '@/services/wagent'
 import { connectToHost } from '@/services/wagent'
+import { destroySessionData } from '@/services/sessions/sessionRegistry'
 import { requireHost, useHostStore, waitForHosts } from './hostStore'
-import { useChatStore } from './chatStore'
 import { idbStorage } from './idbStorage'
 import {
   DEFAULT_SESSION_FILTERS,
@@ -105,7 +105,7 @@ export const useSessionStore = create<SessionStoreState>()(
         await client.deleteSession(sessionId)
         // Chat attachments are app-scoped (see ChatPane). Destroying the
         // session is the authoritative signal to tear one down.
-        useChatStore.getState().closeSession(sessionId)
+        destroySessionData(sessionId)
         const list = get().byHost[hostId] ?? []
         set({
           byHost: {

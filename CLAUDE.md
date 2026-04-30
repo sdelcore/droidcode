@@ -91,8 +91,10 @@ src/
     messaging/         event accumulator → Message[]
     db/                Dexie (hosts, projects, sessionPreferences,
                        hostModelDefaults) — local-only UX state
-    sessions/          sort + filter helpers (sortAndFilter, homeFilters,
-                       panes)
+    sessions/          sessionRegistry (one SSE per session — chat +
+                       live status), homeView (URL ↔ filters cascade),
+                       sessionFields (shared session-shape helpers),
+                       panes (cross-host pane tuples)
     errors/, util/
   types/domain.ts      Host, ProjectFolder, SessionPreferences, …
 
@@ -145,6 +147,10 @@ existing ones.
 * `interface` for object shapes, `type` for unions.
 * Use `createWagentClient` / `connectToHost` from `services/wagent/`;
   don't hand-roll fetches against `/v1/...`.
+* For per-session state (messages, live counters, pending permissions),
+  go through `sessionRegistry` — `useStickyChat` for chat panes,
+  `useWatchLive` / `useWatchLiveMany` for live tiles. Don't subscribe
+  to SSE outside the registry.
 * Never `?? []` inside a zustand selector — allocate a module-level
   `EMPTY_FOO` instead.
 * Use `formatError` from `services/errors/` for toast text.

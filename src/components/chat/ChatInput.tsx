@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { ImagePlus, Send, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { useChatStore } from '@/stores'
+import { useChatPane, sendPrompt, interrupt, runClientSlashCommand } from '@/stores'
 import { Button } from '@/components/ui/button'
 import { randomId } from '@/services/util/id'
 
@@ -24,10 +24,7 @@ export function ChatInput({ sessionId, value, onChange, disabled }: ChatInputPro
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [images, setImages] = useState<ImageAttachment[]>([])
-  const isStreaming = useChatStore((s) => s.byId[sessionId]?.isStreaming ?? false)
-  const sendPrompt = useChatStore((s) => s.sendPrompt)
-  const interrupt = useChatStore((s) => s.interrupt)
-  const runClientSlashCommand = useChatStore((s) => s.runClientSlashCommand)
+  const isStreaming = useChatPane(sessionId)?.isStreaming ?? false
 
   const addFiles = useCallback((files: FileList | null) => {
     if (!files) return
@@ -78,7 +75,7 @@ export function ChatInput({ sessionId, value, onChange, disabled }: ChatInputPro
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Send failed')
     }
-  }, [sessionId, value, onChange, images, sendPrompt, runClientSlashCommand])
+  }, [sessionId, value, onChange, images])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {

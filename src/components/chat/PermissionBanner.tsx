@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { PermissionOutcome, PermissionRequestPayload } from '@/services/wagent'
-import { useChatStore } from '@/stores'
+import { respondPermission } from '@/stores'
 import { Button } from '@/components/ui/button'
 
 interface PermissionBannerProps {
@@ -9,8 +9,6 @@ interface PermissionBannerProps {
 }
 
 export function PermissionBanner({ sessionId, request }: PermissionBannerProps) {
-  const respond = useChatStore((s) => s.respondPermission)
-
   const outcomes = useMemo(() => {
     const order: PermissionOutcome[] = ['allow_always', 'allow_once', 'reject']
     return order.filter((o) => (request.availableOutcomes ?? []).includes(o))
@@ -28,7 +26,7 @@ export function PermissionBanner({ sessionId, request }: PermissionBannerProps) 
               key={outcome}
               size="sm"
               variant={outcome === 'reject' ? 'ghost' : 'default'}
-              onClick={() => respond(sessionId, request.requestId, outcome)}
+              onClick={() => respondPermission(sessionId, request.requestId, outcome)}
             >
               {outcomeLabel(outcome)}
             </Button>
