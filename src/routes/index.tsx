@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { HomePage } from '@/components/home/HomePage'
 import { NewSessionDialog } from '@/components/NewSessionDialog'
+import { MobileSessions } from '@/components/mobile/MobileSessions'
+import { useIsMobile } from '@/lib/useIsMobile'
 import { validateHomeSearch, type HomeSearch } from '@/services/sessions/homeView'
 
 export const Route = createFileRoute('/')({
@@ -12,7 +14,12 @@ export const Route = createFileRoute('/')({
 function HomeRoute() {
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const [newOpen, setNewOpen] = useState(false)
+
+  if (isMobile) {
+    return <MobileSessions search={search} />
+  }
 
   return (
     <>

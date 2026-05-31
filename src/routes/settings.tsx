@@ -9,6 +9,8 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { HostsSection } from '@/components/settings/HostsSection'
+import { MobileSettings } from '@/components/mobile/MobileSettings'
+import { useIsMobile } from '@/lib/useIsMobile'
 import { useSettingsStore } from '@/stores'
 
 export const Route = createFileRoute('/settings')({
@@ -16,6 +18,12 @@ export const Route = createFileRoute('/settings')({
 })
 
 function Settings() {
+  const isMobile = useIsMobile()
+  if (isMobile) return <MobileSettings />
+  return <DesktopSettings />
+}
+
+function DesktopSettings() {
   const { theme = 'system', setTheme } = useTheme()
   const debugLogs = useSettingsStore((s) => s.debugLogs)
   const clearLogs = useSettingsStore((s) => s.clearLogs)

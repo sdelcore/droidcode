@@ -118,9 +118,46 @@ credentials — the cheapest way to confirm the wire is healthy.
 /chat/$hostId/$sessionId?extra=hostId:sessionId,…  chat, up to 3 panes +
                                                    sidebar. Panes can span
                                                    hosts.
+/activity                                          cross-host activity
+                                                   timeline pulled from
+                                                   per-session event logs.
 /settings                                          hosts CRUD, theme,
                                                    auto-accept, debug logs.
 ```
+
+## Mobile companion
+
+Viewports ≤768px drop the desktop chrome and render an editorial dark
+mobile shell with a bottom tab bar (Chat / Sessions / Activity /
+Settings). Each route checks `useIsMobile` and switches between the
+desktop component and a mobile-shaped one. The split lives in:
+
+```
+src/components/mobile/
+  MobileTabBar.tsx           bottom nav (Chat/Sessions/Activity/Settings)
+  MobileTopBar.tsx           alias + host swatch + agent tone + cwd subline
+  MobilePaneStack.tsx        horizontal-scrollable pinned-pane rail
+  MobileChat.tsx             host stack + transcript + composer
+  MobileComposer.tsx         scope chips, broadcast toggle, send/interrupt
+  MobileMessage.tsx          transcript message rendering
+  MobilePermissionCard.tsx   inline allow/deny prompt
+  MobileSessions.tsx         search + host-filter chips + sectioned list
+  MobileActivity.tsx         timeline from listEvents across all sessions
+  MobileSettings.tsx         hosts CRUD + prefs + about
+  sheets/
+    HostsSheet.tsx           bottom sheet for switching hosts
+    NewSessionSheet.tsx      bridges the wagent-aware NewSessionDialog
+    PaneActionSheet.tsx      long-press menu — open / pin / unpin
+```
+
+Host colour comes from `services/identity.ts` (5 fixed oklch hues
+indexed by `hostId mod 5`); agent tone + sigil come from the same file.
+The editorial palette + mobile shell CSS classes live in
+`src/index.css` (`.mobile-shell`, `.m-topbar`, `.m-pane-stack`,
+`.m-composer`, `.m-tabbar`, `.m-sheet`, etc.).
+
+Broadcast mode in the composer fans the next prompt to every pinned
+session via `sessionRegistry.sendMessage` per ref.
 
 ### Home-page URL filter state
 

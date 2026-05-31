@@ -83,9 +83,13 @@ export interface WagentClient {
     cwd: string
     alias?: string | null
     model?: string | null
+    mode?: string | null
   }): Promise<Session>
   getSession(id: string): Promise<Session>
-  patchSession(id: string, patch: { alias?: string | null; model?: string | null }): Promise<Session>
+  patchSession(
+    id: string,
+    patch: { alias?: string | null; model?: string | null; mode?: string | null },
+  ): Promise<Session>
   deleteSession(id: string): Promise<void>
 
   listEvents(sessionId: string, opts?: { after?: number; limit?: number }): Promise<EventEnvelope[]>
