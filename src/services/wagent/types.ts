@@ -3,12 +3,26 @@
 
 export type AgentKind = 'claude' | 'pi' | 'echo'
 
+// Coarse lifecycle state surfaced on Session so list views can colour
+// rows without subscribing to SSE. Maintained server-side; clients
+// treat it as read-only.
+export type SessionStatus =
+  | 'idle'
+  | 'running'
+  | 'needs_input'
+  | 'error'
+  | 'destroyed'
+
 export interface Session {
   id: string
   agent: AgentKind
   cwd: string
   alias: string | null
   model: string | null
+  // Free-form UX label set by clients on POST / PATCH. Adapters ignore
+  // it. Common conventions: 'edit' / 'shell' / 'plan' / 'build'.
+  mode: string | null
+  status: SessionStatus
   createdAt: number
   updatedAt: number
   destroyedAt: number | null

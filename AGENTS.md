@@ -105,6 +105,36 @@ scripts/               # Smoke + tooling
   releases.
 * **Don't emoji in code.** Unicode icons are fine when they're part of
   the design system (lucide-react).
+* **Mobile (≤768px) renders the editorial mobile shell under
+  `components/mobile/`.** Each route picks its branch with
+  `useIsMobile` (`src/lib/useIsMobile.ts`). Don't conditionally call
+  hooks around that branch — keep desktop/mobile as separate sibling
+  components so the rules-of-hooks hold.
+* **Host hue + agent tone come from `services/identity.ts`.** Use
+  `hostHue(hostId)`, `agentTone(agent)`, `agentSigil(agent)`,
+  `agentName(agent)`. The 5 host hues + 4 agent tones are defined as
+  oklch CSS variables in `index.css` (`--host-1..5`,
+  `--agent-claude`, etc.). New host-aware UI should consume the
+  variable via `style={{ '--c': hostHue(id) }}` — never hardcode hex.
+* **Mobile shell styles live under `.mobile-shell` + `.m-*` classes in
+  `index.css`** — not Tailwind utilities. The editorial palette
+  remapped the shadcn tokens to oklch warm-dark values; existing
+  shadcn components keep working unmodified.
+* **Mobile chat tracks the user's last pinned set via
+  `lastPinnedChatStore`** so the bottom Chat tab restores the previous
+  pane composition instead of dumping the user on an arbitrary
+  session.
+* **Session lifecycle is server-driven via `session.status`** (idle /
+  running / needs_input / error / destroyed). Bucket session lists by
+  reading `session.status` instead of attaching SSE for every row;
+  `useLiveStatus` overrides only when SSE is fresher than the periodic
+  list refresh. The needs-input badge on the tab bar reads from
+  `byHost` rows directly — no live-status fan-out.
+* **`session.mode` is a free-form UX label.** Set on POST / PATCH
+  (`NewSessionDialog` ships an inline picker with edit / shell / plan /
+  build presets). Adapters on wagent ignore it; clients should treat
+  it as a label to render in the composer scope chip and (eventually)
+  filter on.
 
 ## Code style (new stack)
 

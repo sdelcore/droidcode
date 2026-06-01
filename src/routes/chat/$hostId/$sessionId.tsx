@@ -10,6 +10,8 @@ import { ArrowLeft, PanelLeft, Pin, Plus } from 'lucide-react'
 import { AddPaneDialog } from '@/components/chat/AddPaneDialog'
 import { ChatPane } from '@/components/chat/ChatPane'
 import { SessionSidebar } from '@/components/chat/SessionSidebar'
+import { MobileChat } from '@/components/mobile/MobileChat'
+import { useIsMobile } from '@/lib/useIsMobile'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -39,6 +41,18 @@ export const Route = createFileRoute('/chat/$hostId/$sessionId')({
 const MAX_PANES_DESKTOP = 3
 
 function ChatScreen() {
+  const { hostId, sessionId } = useParams({ from: '/chat/$hostId/$sessionId' })
+  const search = useSearch({ from: '/chat/$hostId/$sessionId' })
+  const isMobile = useIsMobile()
+  const numericHostId = Number(hostId)
+
+  if (isMobile) {
+    return <MobileChat hostId={numericHostId} sessionId={sessionId} extra={search.extra} />
+  }
+  return <DesktopChat />
+}
+
+function DesktopChat() {
   const { hostId, sessionId } = useParams({ from: '/chat/$hostId/$sessionId' })
   const search = useSearch({ from: '/chat/$hostId/$sessionId' })
   const navigate = useNavigate()

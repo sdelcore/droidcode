@@ -19,6 +19,7 @@ export interface SessionCreateInput {
   cwd: string
   alias?: string | null
   model?: string | null
+  mode?: string | null
 }
 
 interface SessionStoreState {

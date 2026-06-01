@@ -129,6 +129,7 @@ function NewSessionForm({
   const [folder, setFolder] = useState<string>(initialCwd ?? '')
   const [folderError, setFolderError] = useState<string | null>(null)
   const [alias, setAlias] = useState('')
+  const [sessionMode, setSessionMode] = useState<string>('')
   const [selectedAgent, setSelectedAgent] = useState('')
   const [rememberedFolders, setRememberedFolders] = useState<ProjectFolder[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -146,6 +147,7 @@ function NewSessionForm({
     setHostId(defaultHost)
     setFolder(initialCwd ?? '')
     setAlias('')
+    setSessionMode('')
     setSelectedAgent('')
     setFolderError(null)
     setMode('form')
@@ -255,6 +257,7 @@ function NewSessionForm({
         agent: selectedAgent as AgentKind,
         cwd,
         alias: finalAlias,
+        mode: sessionMode.trim() || null,
       })
       onCreated(hostId, record.id)
       onOpenChange(false)
@@ -334,6 +337,24 @@ function NewSessionForm({
           }
           className="h-11 text-base sm:h-9 sm:text-sm"
         />
+      </Field>
+
+      <Field
+        label="Mode (optional)"
+        hint="Free-form label surfaced in the composer scope chip."
+      >
+        <div className="flex flex-wrap gap-2">
+          {['edit', 'shell', 'plan', 'build'].map((preset) => (
+            <AgentChip
+              key={preset}
+              label={preset}
+              selected={sessionMode === preset}
+              onSelect={() =>
+                setSessionMode((prev) => (prev === preset ? '' : preset))
+              }
+            />
+          ))}
+        </div>
       </Field>
 
       {installed.length > 1 && (
